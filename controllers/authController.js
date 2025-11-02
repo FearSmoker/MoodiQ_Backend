@@ -12,9 +12,17 @@ const generateToken = (id) => {
 };
 
 const getFrontendUrl = () => {
-  const frontendUrl = process.env.FRONTEND_URL || 'https://moodiq.netlify.app';
-  console.log('🌐 Frontend URL:', frontendUrl);
-  return frontendUrl.replace(/\/$/, '');
+  // ALWAYS use the environment variable, never hardcode localhost
+  const frontendUrl = process.env.FRONTEND_URL;
+  
+  if (!frontendUrl) {
+    console.error('❌ CRITICAL: FRONTEND_URL not set in environment variables!');
+    throw new Error('FRONTEND_URL environment variable is required');
+  }
+  
+  const cleanUrl = frontendUrl.replace(/\/$/, ''); // Remove trailing slash
+  console.log('🌐 Using Frontend URL:', cleanUrl);
+  return cleanUrl;
 };
 
 // =================================================================
@@ -36,6 +44,7 @@ const spotifyScopes = [
   'user-library-modify',
 ];
 
+// Initialize Spotify API with credentials from environment
 const spotifyApi = new SpotifyWebApi({
   clientId: process.env.SPOTIFY_CLIENT_ID,
   clientSecret: process.env.SPOTIFY_CLIENT_SECRET,
@@ -43,16 +52,21 @@ const spotifyApi = new SpotifyWebApi({
 });
 
 /**
- * @desc    Initiate Spotify login
+ * @desc    Initiate Spotify login - ONLY redirects to Spotify
  * @route   GET /api/auth/login
+ * @access  Public
  */
 export const login = (req, res) => {
-  console.log('🔐 ========== SPOTIFY LOGIN INITIATED ==========');
-  console.log('Environment:', process.env.NODE_ENV);
-  console.log('Spotify Client ID:', process.env.SPOTIFY_CLIENT_ID ? `Set (${process.env.SPOTIFY_CLIENT_ID.substring(0, 10)}...)` : '❌ MISSING');
-  console.log('Spotify Client Secret:', process.env.SPOTIFY_CLIENT_SECRET ? 'Set ✓' : '❌ MISSING');
-  console.log('Spotify Redirect URI:', process.env.SPOTIFY_REDIRECT_URI);
+  console.log('\n' + '='.repeat(60));
+  console.log('🔐 SPOTIFY LOGIN INITIATED');
+  console.log('='.repeat(60));
+  console.log('📍 Environment:', process.env.NODE_ENV);
+  console.log('🔑 Client ID:', process.env.SPOTIFY_CLIENT_ID ? `${process.env.SPOTIFY_CLIENT_ID.substring(0, 10)}...` : '❌ MISSING');
+  console.log('🔒 Client Secret:', process.env.SPOTIFY_CLIENT_SECRET ? '✓ Set' : '❌ MISSING');
+  console.log('🔄 Redirect URI:', process.env.SPOTIFY_REDIRECT_URI);
+  console.log('🌐 Frontend URL:', process.env.FRONTEND_URL);
   
+  // Validate environment variables
   if (!process.env.SPOTIFY_CLIENT_ID || !process.env.SPOTIFY_CLIENT_SECRET) {
     console.error('❌ CRITICAL: Spotify credentials missing!');
     return res.status(500).json({ 
@@ -60,100 +74,164 @@ export const login = (req, res) => {
       message: 'Spotify credentials not configured'
     });
   }
+
+  if (!process.env.FRONTEND_URL) {
+    console.error('❌ CRITICAL: FRONTEND_URL not set!');
+    return res.status(500).json({ 
+      error: 'Server configuration error',
+      message: 'Frontend URL not configured'
+    });
+  }
   
   try {
-    // Create authorization URL with state parameter for security
+    // Generate state parameter for security (CSRF protection)
     const state = Buffer.from(JSON.stringify({ 
       timestamp: Date.now(),
-      random: Math.random().toString(36)
+      nonce: Math.random().toString(36).substring(2, 15)
     })).toString('base64');
     
+    // Create Spotify authorization URL
+    // This redirects to Spotify's OFFICIAL consent screen
     const authorizeURL = spotifyApi.createAuthorizeURL(spotifyScopes, state);
-    console.log('🔗 Generated Spotify URL:', authorizeURL);
-    console.log('✅ Redirecting to Spotify authorization...');
     
+    console.log('✅ Authorization URL generated successfully');
+    console.log('🔗 Spotify OAuth URL:', authorizeURL);
+    console.log('📤 Redirecting user to Spotify...\n');
+    
+    // Redirect to Spotify - NO DATABASE OPERATIONS HERE
     res.redirect(authorizeURL);
+    
   } catch (err) {
     console.error('❌ Error creating Spotify authorization URL:', err.message);
-    console.error('Error stack:', err.stack);
-    const frontendUrl = getFrontendUrl();
-    res.redirect(`${frontendUrl}/?error=spotify_config_error`);
+    console.error('Stack trace:', err.stack);
+    
+    try {
+      const frontendUrl = getFrontendUrl();
+      res.redirect(`${frontendUrl}/?error=spotify_config_error&message=${encodeURIComponent('Failed to initialize Spotify login')}`);
+    } catch (urlError) {
+      res.status(500).json({ error: 'Configuration error' });
+    }
   }
 };
 
 /**
- * @desc    Handle Spotify callback, log in or create user, send JWT
+ * @desc    Handle Spotify callback - ONLY create user after successful auth
  * @route   GET /api/auth/callback
+ * @access  Public (but requires valid Spotify authorization code)
  */
 export const spotifyCallback = async (req, res) => {
-  console.log('🔥 ========== SPOTIFY CALLBACK RECEIVED ==========');
-  console.log('Full URL:', req.url);
-  console.log('Query params:', req.query);
+  console.log('\n' + '='.repeat(60));
+  console.log('🔥 SPOTIFY CALLBACK RECEIVED');
+  console.log('='.repeat(60));
+  console.log('📍 Request URL:', req.url);
+  console.log('📦 Query params:', JSON.stringify(req.query, null, 2));
   
   const code = req.query.code || null;
   const error = req.query.error || null;
-  const frontendUrl = getFrontendUrl();
+  const state = req.query.state || null;
+  
+  let frontendUrl;
+  try {
+    frontendUrl = getFrontendUrl();
+  } catch (err) {
+    console.error('❌ Failed to get frontend URL:', err.message);
+    return res.status(500).send('Server configuration error: Frontend URL not set');
+  }
 
-  console.log('Code present:', !!code);
-  console.log('Code length:', code?.length);
-  console.log('Error:', error);
-  console.log('Frontend URL:', frontendUrl);
+  console.log('🌐 Frontend URL for redirect:', frontendUrl);
+  console.log('🔍 Authorization code present:', !!code);
+  console.log('❌ Error present:', error || 'None');
 
-  // Handle user denial or cancellation - REDIRECT TO HOMEPAGE
+  // ============================================
+  // HANDLE USER CANCELLATION
+  // ============================================
   if (error === 'access_denied') {
-    console.log('❌ User denied access or cancelled authorization');
+    console.log('🚫 USER CANCELLED AUTHORIZATION');
     console.log('🔄 Redirecting to homepage...');
+    console.log('='.repeat(60) + '\n');
+    
+    // NO DATABASE OPERATIONS - just redirect back
     return res.redirect(`${frontendUrl}/?cancelled=true`);
   }
 
+  // ============================================
+  // VALIDATE AUTHORIZATION CODE
+  // ============================================
   if (!code) {
-    console.error('❌ No authorization code received');
-    return res.redirect(`${frontendUrl}/?error=no_code&message=${encodeURIComponent('No authorization code received from Spotify')}`);
+    console.error('❌ No authorization code received from Spotify');
+    console.log('='.repeat(60) + '\n');
+    return res.redirect(`${frontendUrl}/?error=no_code&message=${encodeURIComponent('No authorization code received')}`);
   }
 
+  // ============================================
+  // EXCHANGE CODE FOR TOKENS
+  // ============================================
   try {
-    console.log('🔄 Exchanging code for tokens...');
-    console.log('Using Client ID:', process.env.SPOTIFY_CLIENT_ID?.substring(0, 10) + '...');
+    console.log('🔄 Exchanging authorization code for access tokens...');
     
     const data = await spotifyApi.authorizationCodeGrant(code);
     const { access_token, refresh_token, expires_in } = data.body;
 
-    console.log('✅ Token exchange successful!');
-    console.log('Access token length:', access_token?.length);
-    console.log('Refresh token present:', !!refresh_token);
-    console.log('Expires in:', expires_in, 'seconds');
+    if (!access_token || !refresh_token) {
+      throw new Error('Missing tokens in Spotify response');
+    }
 
+    console.log('✅ Token exchange successful!');
+    console.log('   - Access token length:', access_token.length);
+    console.log('   - Refresh token present:', !!refresh_token);
+    console.log('   - Expires in:', expires_in, 'seconds');
+
+    // Set tokens for API calls
     spotifyApi.setAccessToken(access_token);
     spotifyApi.setRefreshToken(refresh_token);
 
-    console.log('👤 Fetching user profile from Spotify...');
+    // ============================================
+    // FETCH USER PROFILE FROM SPOTIFY
+    // ============================================
+    console.log('👤 Fetching user profile from Spotify API...');
+    
     const me = await spotifyApi.getMe();
+    
+    if (!me.body || !me.body.id) {
+      throw new Error('Invalid user profile response from Spotify');
+    }
+
     const spotifyId = me.body.id;
     const email = me.body.email;
-    const displayName = me.body.display_name;
+    const displayName = me.body.display_name || 'Spotify User';
     const avatarUrl = me.body.images && me.body.images.length > 0 ? me.body.images[0].url : null;
 
-    console.log('✅ User profile retrieved:');
-    console.log('  - Display Name:', displayName);
-    console.log('  - Spotify ID:', spotifyId);
-    console.log('  - Email:', email);
+    console.log('✅ User profile retrieved successfully:');
+    console.log('   - Display Name:', displayName);
+    console.log('   - Spotify ID:', spotifyId);
+    console.log('   - Email:', email);
 
+    // ============================================
+    // DATABASE OPERATIONS - ONLY NOW
+    // ============================================
     console.log('💾 Checking database for existing user...');
+    
     let user = await User.findOne({ spotifyId });
 
     if (user) {
-      console.log('🔄 User exists, updating tokens...');
+      console.log('🔄 User exists - updating tokens and profile...');
+      
       user.accessToken = access_token;
       user.refreshToken = refresh_token;
       user.tokenExpires = Date.now() + expires_in * 1000;
       user.displayName = displayName;
       user.email = email;
       user.avatarUrl = avatarUrl;
+      user.lastActive = Date.now();
+      
       await user.save();
-      console.log('✅ User updated successfully');
+      
+      console.log('✅ User updated successfully (ID:', user._id + ')');
+      
     } else {
-      // ONLY CREATE USER AFTER SUCCESSFUL AUTHORIZATION
-      console.log('🆕 Creating new user AFTER authorization...');
+      console.log('🆕 New user - creating in database...');
+      console.log('   ⚠️  USER IS BEING CREATED ONLY AFTER SPOTIFY AUTHORIZATION');
+      
       user = await User.create({
         spotifyId,
         email,
@@ -163,40 +241,56 @@ export const spotifyCallback = async (req, res) => {
         refreshToken: refresh_token,
         tokenExpires: Date.now() + expires_in * 1000,
       });
-      console.log('✅ New user created with ID:', user._id);
+      
+      console.log('✅ New user created successfully (ID:', user._id + ')');
     }
 
-    console.log('🔐 Generating JWT token...');
-    const token = generateToken(user._id);
-    console.log('JWT token generated, length:', token?.length);
-
-    const redirectUrl = `${frontendUrl}/auth/callback?token=${token}`;
-    console.log('🔀 REDIRECTING TO:', redirectUrl);
-    console.log('✅ ========== SPOTIFY AUTH COMPLETE ==========');
+    // ============================================
+    // GENERATE JWT TOKEN
+    // ============================================
+    console.log('🔐 Generating JWT token for user...');
     
-    res.redirect(redirectUrl);
+    const token = generateToken(user._id);
+    
+    console.log('✅ JWT token generated (length:', token.length + ')');
+
+    // ============================================
+    // REDIRECT TO FRONTEND
+    // ============================================
+    const redirectUrl = `${frontendUrl}/auth/callback?token=${token}`;
+    
+    console.log('🔀 FINAL REDIRECT:');
+    console.log('   To:', redirectUrl);
+    console.log('✅ AUTHENTICATION SUCCESSFUL');
+    console.log('='.repeat(60) + '\n');
+    
+    return res.redirect(redirectUrl);
 
   } catch (err) {
-    console.error('❌ ========== SPOTIFY AUTH FAILED ==========');
-    console.error('Error message:', err.message);
+    console.error('\n' + '='.repeat(60));
+    console.error('❌ AUTHENTICATION FAILED');
+    console.error('='.repeat(60));
     console.error('Error name:', err.name);
-    console.error('Error stack:', err.stack);
+    console.error('Error message:', err.message);
+    console.error('Stack trace:', err.stack);
     
     if (err.response) {
-      console.error('Spotify API Response:');
+      console.error('Spotify API Error Response:');
       console.error('  - Status:', err.response.status);
-      console.error('  - Data:', err.response.data);
+      console.error('  - Data:', JSON.stringify(err.response.data, null, 2));
     }
     
-    // Properly encode error message
+    console.error('='.repeat(60) + '\n');
+    
     const errorMessage = encodeURIComponent(err.message || 'Authentication failed');
-    res.redirect(`${frontendUrl}/?error=auth_failed&message=${errorMessage}`);
+    return res.redirect(`${frontendUrl}/?error=auth_failed&message=${errorMessage}`);
   }
 };
 
 /**
  * @desc    Refresh Spotify access token
  * @route   POST /api/auth/refresh
+ * @access  Public (requires refresh token)
  */
 export const refreshToken = async (req, res) => {
   const { refreshToken } = req.body;
@@ -215,7 +309,7 @@ export const refreshToken = async (req, res) => {
   });
 
   try {
-    console.log('🔄 Refreshing access token...');
+    console.log('🔄 Refreshing access token with Spotify...');
     const data = await spotifyRefreshApi.refreshAccessToken();
     const { access_token, expires_in } = data.body;
     
@@ -250,6 +344,7 @@ export const refreshToken = async (req, res) => {
 /**
  * @desc    Get logged in user's details
  * @route   GET /api/auth/me
+ * @access  Protected
  */
 export const getMe = async (req, res) => {
   try {
