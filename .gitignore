@@ -1,0 +1,33 @@
+# Dependency directories
+node_modules/
+
+# Environment variables
+.env
+.env.*
+!/.env.example # If you have an example .env file to be tracked
+
+# Log files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# Build artifacts
+dist/
+build/
+coverage/
+
+# IDE and OS specific files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Test related files
+*.spec.js
+*.test.js
+__snapshots__/
+
+# Other common temporary files
+tmp/
+temp/
