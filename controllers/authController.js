@@ -12,12 +12,8 @@ const generateToken = (id) => {
 };
 
 const getFrontendUrl = () => {
-  // HARDCODED for emergency fix - change this to your actual frontend URL
   const frontendUrl = process.env.FRONTEND_URL || 'https://moodiq.netlify.app';
-  
   console.log('🌐 Frontend URL:', frontendUrl);
-  
-  // Remove trailing slash if present
   return frontendUrl.replace(/\/$/, '');
 };
 
@@ -47,15 +43,18 @@ const spotifyApi = new SpotifyWebApi({
 });
 
 /**
- * @desc    Initiate Spotify login
+ * @desc    Initiate Spotify login - MUST show consent screen
  * @route   GET /api/auth/login
  */
 export const login = (req, res) => {
-  console.log('🔐 ========== SPOTIFY LOGIN INITIATED ==========');
-  console.log('Environment:', process.env.NODE_ENV);
-  console.log('Spotify Client ID:', process.env.SPOTIFY_CLIENT_ID ? `Set (${process.env.SPOTIFY_CLIENT_ID.substring(0, 10)}...)` : '❌ MISSING');
-  console.log('Spotify Client Secret:', process.env.SPOTIFY_CLIENT_SECRET ? 'Set ✓' : '❌ MISSING');
-  console.log('Spotify Redirect URI:', process.env.SPOTIFY_REDIRECT_URI);
+  console.log('\n' + '='.repeat(70));
+  console.log('🔐 SPOTIFY LOGIN INITIATED');
+  console.log('='.repeat(70));
+  console.log('📍 Environment:', process.env.NODE_ENV);
+  console.log('🔑 Client ID:', process.env.SPOTIFY_CLIENT_ID ? `${process.env.SPOTIFY_CLIENT_ID.substring(0, 15)}...` : '❌ MISSING');
+  console.log('🔒 Client Secret:', process.env.SPOTIFY_CLIENT_SECRET ? '✓ Configured' : '❌ MISSING');
+  console.log('🔄 Redirect URI:', process.env.SPOTIFY_REDIRECT_URI);
+  console.log('🌐 Frontend URL:', process.env.FRONTEND_URL);
   
   if (!process.env.SPOTIFY_CLIENT_ID || !process.env.SPOTIFY_CLIENT_SECRET) {
     console.error('❌ CRITICAL: Spotify credentials missing!');
@@ -66,89 +65,146 @@ export const login = (req, res) => {
   }
   
   try {
-    const authorizeURL = spotifyApi.createAuthorizeURL(spotifyScopes, 'state');
-    console.log('🔗 Generated Spotify URL:', authorizeURL);
-    console.log('✅ Redirecting to Spotify...');
+    // CRITICAL: Generate unique state for each request
+    const state = Buffer.from(JSON.stringify({ 
+      timestamp: Date.now(),
+      random: Math.random().toString(36).substring(7)
+    })).toString('base64');
+    
+    // Create authorization URL that will DEFINITELY show consent screen
+    // The key is to use show_dialog=true parameter
+    const authorizeURL = spotifyApi.createAuthorizeURL(spotifyScopes, state, true);
+    
+    console.log('✅ Authorization URL generated');
+    console.log('🔗 URL:', authorizeURL);
+    console.log('📤 Redirecting to Spotify consent screen...');
+    console.log('⚠️  USER SHOULD SEE SPOTIFY\'S OFFICIAL CONSENT SCREEN NOW');
+    console.log('='.repeat(70) + '\n');
+    
+    // NO DATABASE OPERATIONS HERE
     res.redirect(authorizeURL);
+    
   } catch (err) {
     console.error('❌ Error creating Spotify authorization URL:', err.message);
-    console.error('Error stack:', err.stack);
+    console.error('Stack:', err.stack);
+    console.log('='.repeat(70) + '\n');
+    
     const frontendUrl = getFrontendUrl();
-    res.redirect(`${frontendUrl}/login?error=spotify_config_error`);
+    res.redirect(`${frontendUrl}/?error=spotify_config_error`);
   }
 };
 
 /**
- * @desc    Handle Spotify callback, log in or create user, send JWT
+ * @desc    Handle Spotify callback - ONLY create user AFTER authorization
  * @route   GET /api/auth/callback
  */
 export const spotifyCallback = async (req, res) => {
-  console.log('📥 ========== SPOTIFY CALLBACK RECEIVED ==========');
-  console.log('Full URL:', req.url);
-  console.log('Query params:', req.query);
+  console.log('\n' + '='.repeat(70));
+  console.log('🔥 SPOTIFY CALLBACK RECEIVED');
+  console.log('='.repeat(70));
+  console.log('📍 Request URL:', req.url);
+  console.log('📦 Query Parameters:', JSON.stringify(req.query, null, 2));
   
   const code = req.query.code || null;
   const error = req.query.error || null;
+  const state = req.query.state || null;
   const frontendUrl = getFrontendUrl();
 
-  console.log('Code present:', !!code);
-  console.log('Code length:', code?.length);
-  console.log('Error:', error);
-  console.log('Frontend URL:', frontendUrl);
+  console.log('🔍 Analysis:');
+  console.log('   - Authorization Code:', code ? `Present (${code.length} chars)` : '❌ MISSING');
+  console.log('   - Error:', error || 'None');
+  console.log('   - State:', state ? 'Present' : 'None');
 
-  // Handle user denial or cancellation
+  // ============================================
+  // SCENARIO 1: User Cancelled
+  // ============================================
   if (error === 'access_denied') {
-    console.log('❌ User denied access or cancelled authorization');
-    return res.redirect(`${frontendUrl}/login?error=access_denied&message=You cancelled the Spotify authorization`);
+    console.log('\n🚫 USER CANCELLED AUTHORIZATION');
+    console.log('   Action: Redirecting to homepage');
+    console.log('   Note: NO user will be created in database');
+    console.log('='.repeat(70) + '\n');
+    
+    return res.redirect(`${frontendUrl}/?cancelled=true`);
   }
 
+  // ============================================
+  // SCENARIO 2: No Code (Invalid Request)
+  // ============================================
   if (!code) {
-    console.error('❌ No authorization code received');
-    return res.redirect(`${frontendUrl}/login?error=no_code&message=No authorization code received from Spotify`);
+    console.error('\n❌ INVALID CALLBACK - No authorization code');
+    console.log('='.repeat(70) + '\n');
+    
+    return res.redirect(`${frontendUrl}/?error=no_code&message=${encodeURIComponent('Authorization failed')}`);
   }
 
+  // ============================================
+  // SCENARIO 3: User Authorized - Proceed
+  // ============================================
+  console.log('\n✅ User authorized! Processing...');
+  
   try {
-    console.log('🔄 Exchanging code for tokens...');
-    console.log('Using Client ID:', process.env.SPOTIFY_CLIENT_ID?.substring(0, 10) + '...');
+    // Step 1: Exchange code for tokens
+    console.log('\n📤 Step 1: Exchanging authorization code for tokens...');
     
     const data = await spotifyApi.authorizationCodeGrant(code);
     const { access_token, refresh_token, expires_in } = data.body;
 
-    console.log('✅ Token exchange successful!');
-    console.log('Access token length:', access_token?.length);
-    console.log('Refresh token present:', !!refresh_token);
-    console.log('Expires in:', expires_in, 'seconds');
+    if (!access_token || !refresh_token) {
+      throw new Error('Missing tokens in Spotify response');
+    }
+
+    console.log('✅ Tokens received:');
+    console.log('   - Access Token: ✓ (' + access_token.length + ' chars)');
+    console.log('   - Refresh Token: ✓ (' + refresh_token.length + ' chars)');
+    console.log('   - Expires In: ' + expires_in + ' seconds');
 
     spotifyApi.setAccessToken(access_token);
     spotifyApi.setRefreshToken(refresh_token);
 
-    console.log('👤 Fetching user profile from Spotify...');
+    // Step 2: Fetch user profile from Spotify
+    console.log('\n📤 Step 2: Fetching user profile from Spotify...');
+    
     const me = await spotifyApi.getMe();
+    
+    if (!me.body || !me.body.id) {
+      throw new Error('Invalid user profile response from Spotify');
+    }
+
     const spotifyId = me.body.id;
     const email = me.body.email;
-    const displayName = me.body.display_name;
+    const displayName = me.body.display_name || 'Spotify User';
     const avatarUrl = me.body.images && me.body.images.length > 0 ? me.body.images[0].url : null;
 
     console.log('✅ User profile retrieved:');
-    console.log('  - Display Name:', displayName);
-    console.log('  - Spotify ID:', spotifyId);
-    console.log('  - Email:', email);
+    console.log('   - Name: ' + displayName);
+    console.log('   - Spotify ID: ' + spotifyId);
+    console.log('   - Email: ' + email);
 
-    console.log('💾 Checking database for existing user...');
+    // Step 3: Database operations - ONLY NOW!
+    console.log('\n📤 Step 3: Database operations...');
+    console.log('⚠️  THIS IS THE ONLY POINT WHERE DATABASE IS TOUCHED');
+    
     let user = await User.findOne({ spotifyId });
 
     if (user) {
-      console.log('🔄 User exists, updating...');
+      console.log('📝 Existing user found - updating tokens...');
+      
       user.accessToken = access_token;
       user.refreshToken = refresh_token;
       user.tokenExpires = Date.now() + expires_in * 1000;
       user.displayName = displayName;
       user.email = email;
       user.avatarUrl = avatarUrl;
+      user.lastActive = Date.now();
+      
       await user.save();
-      console.log('✅ User updated successfully');
+      
+      console.log('✅ User updated (ID: ' + user._id + ')');
+      
     } else {
-      console.log('🆕 Creating new user...');
+      console.log('🆕 New user - creating in database...');
+      console.log('⚠️  USER CREATION HAPPENS ONLY AFTER SPOTIFY AUTHORIZATION');
+      
       user = await User.create({
         spotifyId,
         email,
@@ -158,32 +214,45 @@ export const spotifyCallback = async (req, res) => {
         refreshToken: refresh_token,
         tokenExpires: Date.now() + expires_in * 1000,
       });
-      console.log('✅ New user created with ID:', user._id);
+      
+      console.log('✅ New user created (ID: ' + user._id + ')');
     }
 
-    console.log('🔑 Generating JWT token...');
-    const token = generateToken(user._id);
-    console.log('JWT token generated, length:', token?.length);
-
-    const redirectUrl = `${frontendUrl}/callback?token=${token}`;
-    console.log('🔀 REDIRECTING TO:', redirectUrl);
-    console.log('✅ ========== SPOTIFY AUTH COMPLETE ==========');
+    // Step 4: Generate JWT for frontend
+    console.log('\n📤 Step 4: Generating JWT token...');
     
-    res.redirect(redirectUrl);
+    const token = generateToken(user._id);
+    console.log('✅ JWT generated (length: ' + token.length + ')');
+
+    // Step 5: Redirect to frontend with token
+    console.log('\n📤 Step 5: Final redirect to frontend...');
+    
+    const redirectUrl = `${frontendUrl}/auth/callback?token=${token}`;
+    
+    console.log('🔀 Redirecting to: ' + redirectUrl);
+    console.log('\n✅ ========== AUTHENTICATION SUCCESSFUL ==========');
+    console.log('='.repeat(70) + '\n');
+    
+    return res.redirect(redirectUrl);
 
   } catch (err) {
-    console.error('❌ ========== SPOTIFY AUTH FAILED ==========');
-    console.error('Error message:', err.message);
-    console.error('Error name:', err.name);
-    console.error('Error stack:', err.stack);
+    console.error('\n' + '='.repeat(70));
+    console.error('❌ AUTHENTICATION FAILED');
+    console.error('='.repeat(70));
+    console.error('Error Type:', err.name);
+    console.error('Error Message:', err.message);
     
     if (err.response) {
-      console.error('Spotify API Response:');
-      console.error('  - Status:', err.response.status);
-      console.error('  - Data:', err.response.data);
+      console.error('Spotify API Error:');
+      console.error('  Status:', err.response.status);
+      console.error('  Data:', JSON.stringify(err.response.data, null, 2));
     }
     
-    res.redirect(`${frontendUrl}/login?error=auth_failed&message=${encodeURIComponent(err.message)}`);
+    console.error('Stack Trace:', err.stack);
+    console.error('='.repeat(70) + '\n');
+    
+    const errorMessage = encodeURIComponent(err.message || 'Authentication failed');
+    return res.redirect(`${frontendUrl}/?error=auth_failed&message=${errorMessage}`);
   }
 };
 
@@ -307,12 +376,12 @@ export const youtubeCallback = async (req, res) => {
 
   if (error === 'access_denied') {
     console.log('❌ User denied YouTube access');
-    return res.redirect(`${frontendUrl}/dashboard?error=youtube_denied&message=You cancelled YouTube authorization`);
+    return res.redirect(`${frontendUrl}/dashboard?error=youtube_denied&message=${encodeURIComponent('You cancelled YouTube authorization')}`);
   }
 
   if (!code) {
     console.log('❌ No authorization code');
-    return res.redirect(`${frontendUrl}/dashboard?error=youtube_no_code&message=No authorization code received`);
+    return res.redirect(`${frontendUrl}/dashboard?error=youtube_no_code&message=${encodeURIComponent('No authorization code received')}`);
   }
 
   try {
@@ -327,7 +396,7 @@ export const youtubeCallback = async (req, res) => {
 
     const user = await User.findById(userId);
     if (!user) {
-      return res.redirect(`${frontendUrl}/dashboard?error=user_not_found&message=User session expired`);
+      return res.redirect(`${frontendUrl}/dashboard?error=user_not_found&message=${encodeURIComponent('User session expired')}`);
     }
 
     if (!user.authTokens) {
@@ -343,7 +412,7 @@ export const youtubeCallback = async (req, res) => {
     await user.save();
 
     console.log('✅ YouTube account linked successfully');
-    res.redirect(`${frontendUrl}/dashboard?success=youtube_linked&message=YouTube account linked successfully`);
+    res.redirect(`${frontendUrl}/dashboard?success=youtube_linked&message=${encodeURIComponent('YouTube account linked successfully')}`);
 
   } catch (err) {
     console.error('❌ Error during YouTube callback:', err.message);
