@@ -11,7 +11,19 @@ const generateToken = (id) => {
   });
 };
 
-const getFrontendUrl = () => process.env.FRONTEND_URL || 'http://localhost:5173';
+const getFrontendUrl = () => {
+  // IMPORTANT: Make sure FRONTEND_URL is set in production
+  const frontendUrl = process.env.FRONTEND_URL;
+  
+  if (!frontendUrl) {
+    console.error('⚠️ WARNING: FRONTEND_URL environment variable is not set!');
+    console.error('Falling back to localhost - this will NOT work in production!');
+    return 'http://localhost:5173';
+  }
+  
+  // Remove trailing slash if present
+  return frontendUrl.replace(/\/$/, '');
+};
 
 // =================================================================
 // ### 1. Primary Authentication (Spotify) ###
@@ -43,6 +55,9 @@ const spotifyApi = new SpotifyWebApi({
  * @route   GET /api/auth/login
  */
 export const login = (req, res) => {
+  console.log('🔐 Initiating Spotify login...');
+  console.log('Redirect URI configured:', process.env.SPOTIFY_REDIRECT_URI);
+  
   const authorizeURL = spotifyApi.createAuthorizeURL(spotifyScopes, 'state');
   res.redirect(authorizeURL);
 };
@@ -55,7 +70,12 @@ export const spotifyCallback = async (req, res) => {
   const code = req.query.code || null;
   const frontendUrl = getFrontendUrl();
 
+  console.log('📥 Spotify callback received');
+  console.log('Frontend URL:', frontendUrl);
+  console.log('Code present:', !!code);
+
   if (!code) {
+    console.error('❌ No authorization code received');
     return res.redirect(`${frontendUrl}/login?error=no_code`);
   }
 
@@ -72,6 +92,8 @@ export const spotifyCallback = async (req, res) => {
     const displayName = me.body.display_name;
     const avatarUrl = me.body.images && me.body.images.length > 0 ? me.body.images[0].url : null;
 
+    console.log('✅ Successfully authenticated user:', displayName);
+
     let user = await User.findOne({ spotifyId });
 
     if (user) {
@@ -83,6 +105,7 @@ export const spotifyCallback = async (req, res) => {
       user.email = email;
       user.avatarUrl = avatarUrl;
       await user.save();
+      console.log('🔄 Updated existing user');
     } else {
       // Create new user
       user = await User.create({
@@ -94,15 +117,19 @@ export const spotifyCallback = async (req, res) => {
         refreshToken: refresh_token,
         tokenExpires: Date.now() + expires_in * 1000,
       });
+      console.log('🆕 Created new user');
     }
 
     const token = generateToken(user._id);
 
     // Redirect to frontend with JWT
-    res.redirect(`${frontendUrl}/dashboard?token=${token}`);
+    const redirectUrl = `${frontendUrl}/callback?token=${token}`;
+    console.log('🔀 Redirecting to:', redirectUrl);
+    
+    res.redirect(redirectUrl);
 
   } catch (err) {
-    console.error('Error during Spotify callback:', err.message);
+    console.error('❌ Error during Spotify callback:', err.message);
     res.redirect(`${frontendUrl}/login?error=auth_failed`);
   }
 };
@@ -325,7 +352,6 @@ export const appleAuth = (req, res) => {
  */
 export const appleToken = async (req, res) => {
   const { musicUserToken } = req.body;
-  const frontendUrl = getFrontendUrl();
 
   if (!musicUserToken) {
     return res.status(400).json({ message: 'No Apple Music user token provided' });
