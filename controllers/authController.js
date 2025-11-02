@@ -62,22 +62,15 @@ export const login = (req, res) => {
   }
   
   try {
-    // Create authorization URL with state parameter for security
-    const state = Buffer.from(JSON.stringify({ 
-      timestamp: Date.now(),
-      random: Math.random().toString(36)
-    })).toString('base64');
-    
-    const authorizeURL = spotifyApi.createAuthorizeURL(spotifyScopes, state);
+    const authorizeURL = spotifyApi.createAuthorizeURL(spotifyScopes, 'state');
     console.log('🔗 Generated Spotify URL:', authorizeURL);
-    console.log('✅ Redirecting to Spotify authorization...');
-    
+    console.log('✅ Redirecting to Spotify...');
     res.redirect(authorizeURL);
   } catch (err) {
     console.error('❌ Error creating Spotify authorization URL:', err.message);
     console.error('Error stack:', err.stack);
     const frontendUrl = getFrontendUrl();
-    res.redirect(`${frontendUrl}/?error=spotify_config_error`);
+    res.redirect(`${frontendUrl}/login?error=spotify_config_error`);
   }
 };
 
@@ -99,16 +92,15 @@ export const spotifyCallback = async (req, res) => {
   console.log('Error:', error);
   console.log('Frontend URL:', frontendUrl);
 
-  // Handle user denial or cancellation - REDIRECT TO HOMEPAGE
+  // Handle user denial or cancellation
   if (error === 'access_denied') {
     console.log('❌ User denied access or cancelled authorization');
-    console.log('🔄 Redirecting to homepage...');
-    return res.redirect(`${frontendUrl}/?cancelled=true`);
+    return res.redirect(`${frontendUrl}/login?error=access_denied&message=${encodeURIComponent('You cancelled the Spotify authorization')}`);
   }
 
   if (!code) {
     console.error('❌ No authorization code received');
-    return res.redirect(`${frontendUrl}/?error=no_code&message=${encodeURIComponent('No authorization code received from Spotify')}`);
+    return res.redirect(`${frontendUrl}/login?error=no_code&message=${encodeURIComponent('No authorization code received from Spotify')}`);
   }
 
   try {
@@ -142,7 +134,7 @@ export const spotifyCallback = async (req, res) => {
     let user = await User.findOne({ spotifyId });
 
     if (user) {
-      console.log('🔄 User exists, updating tokens...');
+      console.log('🔄 User exists, updating...');
       user.accessToken = access_token;
       user.refreshToken = refresh_token;
       user.tokenExpires = Date.now() + expires_in * 1000;
@@ -152,8 +144,7 @@ export const spotifyCallback = async (req, res) => {
       await user.save();
       console.log('✅ User updated successfully');
     } else {
-      // ONLY CREATE USER AFTER SUCCESSFUL AUTHORIZATION
-      console.log('🆕 Creating new user AFTER authorization...');
+      console.log('🆕 Creating new user...');
       user = await User.create({
         spotifyId,
         email,
@@ -166,11 +157,11 @@ export const spotifyCallback = async (req, res) => {
       console.log('✅ New user created with ID:', user._id);
     }
 
-    console.log('🔐 Generating JWT token...');
+    console.log('🔑 Generating JWT token...');
     const token = generateToken(user._id);
     console.log('JWT token generated, length:', token?.length);
 
-    const redirectUrl = `${frontendUrl}/auth/callback?token=${token}`;
+    const redirectUrl = `${frontendUrl}/callback?token=${token}`;
     console.log('🔀 REDIRECTING TO:', redirectUrl);
     console.log('✅ ========== SPOTIFY AUTH COMPLETE ==========');
     
@@ -190,7 +181,7 @@ export const spotifyCallback = async (req, res) => {
     
     // Properly encode error message
     const errorMessage = encodeURIComponent(err.message || 'Authentication failed');
-    res.redirect(`${frontendUrl}/?error=auth_failed&message=${errorMessage}`);
+    res.redirect(`${frontendUrl}/login?error=auth_failed&message=${errorMessage}`);
   }
 };
 
