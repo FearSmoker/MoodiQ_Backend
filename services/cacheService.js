@@ -2,40 +2,63 @@ import { createClient } from 'redis';
 
 let redisClient;
 let isConnected = false;
+let connectionAttempted = false;
 
 /**
  * Connect to Redis
  */
 export const connectRedis = async () => {
+  // Check if already attempted connection
+  if (connectionAttempted) {
+    console.log('ℹ️ Redis connection already attempted, skipping...');
+    return redisClient;
+  }
+
+  connectionAttempted = true;
+
   // Check if caching is enabled
   if (process.env.ENABLE_CACHE === 'false') {
-    console.log('⚠️ Redis caching is disabled');
+    console.log('ℹ️ Redis caching is disabled via ENABLE_CACHE=false');
+    return null;
+  }
+
+  const redisUrl = process.env.REDIS_URL;
+  
+  if (!redisUrl) {
+    console.warn('⚠️ REDIS_URL not configured. Caching disabled.');
     return null;
   }
 
   try {
-    const redisUrl = process.env.REDIS_URL;
-    
-    if (!redisUrl) {
-      console.warn('⚠️ REDIS_URL not configured. Caching disabled.');
-      return null;
-    }
+    console.log('🔄 Attempting to connect to Redis...');
     
     redisClient = createClient({
       url: redisUrl,
       socket: {
         reconnectStrategy: (retries) => {
-          if (retries > 10) {
-            console.error('❌ Too many Redis reconnection attempts');
-            return new Error('Too many retries');
+          // CRITICAL: Limit reconnection attempts to prevent spam
+          if (retries > 3) {
+            console.error('❌ Redis reconnection failed after 3 attempts. Giving up.');
+            isConnected = false;
+            return new Error('Max reconnection attempts reached');
           }
-          return Math.min(retries * 100, 3000);
+          
+          // Exponential backoff: 5s, 10s, 20s
+          const delay = Math.min(retries * 5000, 20000);
+          console.log(`⏳ Redis reconnecting in ${delay/1000}s (attempt ${retries}/3)...`);
+          return delay;
         },
+        connectTimeout: 10000, // 10 second connection timeout
       },
     });
 
+    // CRITICAL: Only log once when error occurs
+    let errorLogged = false;
     redisClient.on('error', (err) => {
-      console.error('Redis Client Error:', err.message);
+      if (!errorLogged) {
+        console.error('❌ Redis Client Error:', err.message);
+        errorLogged = true;
+      }
       isConnected = false;
     });
 
@@ -46,23 +69,33 @@ export const connectRedis = async () => {
     redisClient.on('ready', () => {
       console.log('✅ Redis client ready');
       isConnected = true;
+      errorLogged = false; // Reset error flag when connection is restored
     });
 
     redisClient.on('end', () => {
-      console.log('❌ Redis connection closed');
+      console.log('ℹ️ Redis connection closed');
       isConnected = false;
     });
 
     await redisClient.connect();
     
-    // Test connection
-    await redisClient.ping();
+    // Test connection with timeout
+    const pingTimeout = setTimeout(() => {
+      throw new Error('Redis ping timeout');
+    }, 5000);
     
+    await redisClient.ping();
+    clearTimeout(pingTimeout);
+    
+    console.log('✅ Redis connection verified');
     return redisClient;
+    
   } catch (err) {
-    console.error('Failed to connect to Redis:', err.message);
+    console.error('❌ Failed to connect to Redis:', err.message);
+    console.warn('⚠️ App will continue without Redis caching');
     isConnected = false;
-    throw err;
+    redisClient = null;
+    return null;
   }
 };
 
@@ -71,22 +104,26 @@ export const connectRedis = async () => {
  */
 export const getFromCache = async (key) => {
   if (!redisClient || !isConnected) {
-    console.warn('Redis not available, skipping cache read');
-    return null;
+    return null; // Silently fail
   }
 
   try {
     const data = await redisClient.get(key);
     
     if (data) {
-      console.log(`📦 Cache HIT: ${key}`);
+      // Only log in development
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`📦 Cache HIT: ${key}`);
+      }
       return JSON.parse(data);
     }
     
-    console.log(`📭 Cache MISS: ${key}`);
     return null;
   } catch (err) {
-    console.error(`Error getting from cache (${key}):`, err.message);
+    // Only log if it's not a connection error
+    if (err.message !== 'Socket not connected') {
+      console.error(`Error getting from cache (${key}):`, err.message);
+    }
     return null;
   }
 };
@@ -96,8 +133,7 @@ export const getFromCache = async (key) => {
  */
 export const setInCache = async (key, value, expiration = 3600) => {
   if (!redisClient || !isConnected) {
-    console.warn('Redis not available, skipping cache write');
-    return false;
+    return false; // Silently fail
   }
 
   try {
@@ -105,10 +141,15 @@ export const setInCache = async (key, value, expiration = 3600) => {
       EX: expiration,
     });
     
-    console.log(`💾 Cache SET: ${key} (expires in ${expiration}s)`);
+    // Only log in development
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`💾 Cache SET: ${key} (expires in ${expiration}s)`);
+    }
     return true;
   } catch (err) {
-    console.error(`Error setting in cache (${key}):`, err.message);
+    if (err.message !== 'Socket not connected') {
+      console.error(`Error setting in cache (${key}):`, err.message);
+    }
     return false;
   }
 };
@@ -118,16 +159,19 @@ export const setInCache = async (key, value, expiration = 3600) => {
  */
 export const deleteFromCache = async (key) => {
   if (!redisClient || !isConnected) {
-    console.warn('Redis not available, skipping cache delete');
     return false;
   }
 
   try {
     await redisClient.del(key);
-    console.log(`🗑️ Cache DELETE: ${key}`);
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`🗑️ Cache DELETE: ${key}`);
+    }
     return true;
   } catch (err) {
-    console.error(`Error deleting from cache (${key}):`, err.message);
+    if (err.message !== 'Socket not connected') {
+      console.error(`Error deleting from cache (${key}):`, err.message);
+    }
     return false;
   }
 };
@@ -137,7 +181,6 @@ export const deleteFromCache = async (key) => {
  */
 export const deletePattern = async (pattern) => {
   if (!redisClient || !isConnected) {
-    console.warn('Redis not available, skipping pattern delete');
     return false;
   }
 
@@ -146,12 +189,16 @@ export const deletePattern = async (pattern) => {
     
     if (keys.length > 0) {
       await redisClient.del(keys);
-      console.log(`🗑️ Cache DELETE pattern: ${pattern} (${keys.length} keys)`);
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`🗑️ Cache DELETE pattern: ${pattern} (${keys.length} keys)`);
+      }
     }
     
     return true;
   } catch (err) {
-    console.error(`Error deleting pattern (${pattern}):`, err.message);
+    if (err.message !== 'Socket not connected') {
+      console.error(`Error deleting pattern (${pattern}):`, err.message);
+    }
     return false;
   }
 };
@@ -168,7 +215,6 @@ export const isRedisConnected = () => {
  */
 export const flushCache = async () => {
   if (!redisClient || !isConnected) {
-    console.warn('Redis not available, skipping cache flush');
     return false;
   }
 
