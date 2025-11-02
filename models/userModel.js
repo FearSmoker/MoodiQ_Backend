@@ -107,7 +107,7 @@ const userSchema = new mongoose.Schema({
   toObject: { virtuals: true },
 });
 
-// Indexes for better query performance
+// Indexes for better query performance - Define them here to avoid duplicates
 userSchema.index({ email: 1 });
 userSchema.index({ spotifyId: 1 });
 userSchema.index({ lastActive: -1 });
