@@ -12,10 +12,14 @@ const generateToken = (id) => {
 };
 
 const getFrontendUrl = () => {
-  // Use FRONTEND_URL from environment, with fallback
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  // CRITICAL: Use production URL, NEVER fallback to localhost
+  const frontendUrl = process.env.FRONTEND_URL;
   
-  // Log the frontend URL being used
+  if (!frontendUrl) {
+    console.error('❌ CRITICAL: FRONTEND_URL not set in environment variables!');
+    throw new Error('FRONTEND_URL environment variable is required');
+  }
+  
   console.log('🌐 Frontend URL:', frontendUrl);
   
   // Remove trailing slash if present
@@ -57,10 +61,15 @@ export const login = (req, res) => {
   console.log('Spotify Client Secret:', process.env.SPOTIFY_CLIENT_SECRET ? 'Set ✓' : 'Missing ✗');
   console.log('Spotify Redirect URI:', process.env.SPOTIFY_REDIRECT_URI);
   
-  const authorizeURL = spotifyApi.createAuthorizeURL(spotifyScopes, 'state');
-  console.log('🔗 Redirecting to Spotify authorization:', authorizeURL);
-  
-  res.redirect(authorizeURL);
+  try {
+    const authorizeURL = spotifyApi.createAuthorizeURL(spotifyScopes, 'state');
+    console.log('🔗 Redirecting to Spotify authorization:', authorizeURL);
+    res.redirect(authorizeURL);
+  } catch (err) {
+    console.error('❌ Error creating Spotify authorization URL:', err.message);
+    const frontendUrl = getFrontendUrl();
+    res.redirect(`${frontendUrl}/login?error=spotify_config_error`);
+  }
 };
 
 /**
@@ -70,22 +79,29 @@ export const login = (req, res) => {
 export const spotifyCallback = async (req, res) => {
   const code = req.query.code || null;
   const error = req.query.error || null;
-  const frontendUrl = getFrontendUrl();
+  
+  let frontendUrl;
+  try {
+    frontendUrl = getFrontendUrl();
+  } catch (err) {
+    console.error('❌ CRITICAL: Cannot get frontend URL:', err.message);
+    return res.status(500).send('Server configuration error: FRONTEND_URL not set');
+  }
 
   console.log('📥 Spotify callback received');
   console.log('Code present:', !!code);
   console.log('Error:', error);
   console.log('Frontend URL:', frontendUrl);
 
-  // Handle user denial
+  // Handle user denial or cancellation
   if (error === 'access_denied') {
-    console.log('❌ User denied access');
-    return res.redirect(`${frontendUrl}/login?error=access_denied`);
+    console.log('❌ User denied access or cancelled authorization');
+    return res.redirect(`${frontendUrl}/login?error=access_denied&message=You cancelled the Spotify authorization`);
   }
 
   if (!code) {
     console.error('❌ No authorization code received');
-    return res.redirect(`${frontendUrl}/login?error=no_code`);
+    return res.redirect(`${frontendUrl}/login?error=no_code&message=No authorization code received from Spotify`);
   }
 
   try {
@@ -160,7 +176,7 @@ export const spotifyCallback = async (req, res) => {
       console.error('Status:', err.response.status);
     }
     
-    res.redirect(`${frontendUrl}/login?error=auth_failed&details=${encodeURIComponent(err.message)}`);
+    res.redirect(`${frontendUrl}/login?error=auth_failed&message=${encodeURIComponent(err.message)}`);
   }
 };
 
@@ -268,18 +284,24 @@ const googleScopes = [
 export const youtubeAuth = (req, res) => {
   console.log('📺 Initiating YouTube auth for user:', req.user._id);
   
-  // Store user ID in state to retrieve after callback
-  const state = Buffer.from(JSON.stringify({ userId: req.user._id })).toString('base64');
-  
-  const authUrl = googleOAuth2Client.generateAuthUrl({
-    access_type: 'offline',
-    scope: googleScopes,
-    prompt: 'consent',
-    state: state,
-  });
-  
-  console.log('🔗 Redirecting to Google OAuth:', authUrl);
-  res.redirect(authUrl);
+  try {
+    // Store user ID in state to retrieve after callback
+    const state = Buffer.from(JSON.stringify({ userId: req.user._id })).toString('base64');
+    
+    const authUrl = googleOAuth2Client.generateAuthUrl({
+      access_type: 'offline',
+      scope: googleScopes,
+      prompt: 'consent',
+      state: state,
+    });
+    
+    console.log('🔗 Redirecting to Google OAuth:', authUrl);
+    res.redirect(authUrl);
+  } catch (err) {
+    console.error('❌ Error creating YouTube auth URL:', err.message);
+    const frontendUrl = getFrontendUrl();
+    res.redirect(`${frontendUrl}/dashboard?error=youtube_config_error`);
+  }
 };
 
 /**
@@ -289,16 +311,31 @@ export const youtubeAuth = (req, res) => {
 export const youtubeCallback = async (req, res) => {
   const code = req.query.code || null;
   const state = req.query.state || null;
-  const frontendUrl = getFrontendUrl();
+  const error = req.query.error || null;
+  
+  let frontendUrl;
+  try {
+    frontendUrl = getFrontendUrl();
+  } catch (err) {
+    console.error('❌ CRITICAL: Cannot get frontend URL:', err.message);
+    return res.status(500).send('Server configuration error: FRONTEND_URL not set');
+  }
 
   console.log('📥 YouTube callback received');
   console.log('Code present:', !!code);
   console.log('State present:', !!state);
+  console.log('Error:', error);
   console.log('Frontend URL:', frontendUrl);
+
+  // Handle user denial
+  if (error === 'access_denied') {
+    console.log('❌ User denied YouTube access or cancelled');
+    return res.redirect(`${frontendUrl}/dashboard?error=youtube_denied&message=You cancelled YouTube authorization`);
+  }
 
   if (!code) {
     console.log('❌ No authorization code');
-    return res.redirect(`${frontendUrl}/dashboard?error=youtube_no_code`);
+    return res.redirect(`${frontendUrl}/dashboard?error=youtube_no_code&message=No authorization code received`);
   }
 
   try {
@@ -322,7 +359,7 @@ export const youtubeCallback = async (req, res) => {
     const user = await User.findById(userId);
     if (!user) {
       console.log('❌ User not found:', userId);
-      return res.redirect(`${frontendUrl}/dashboard?error=user_not_found`);
+      return res.redirect(`${frontendUrl}/dashboard?error=user_not_found&message=User session expired`);
     }
 
     console.log('✅ User found:', user.displayName);
@@ -342,12 +379,12 @@ export const youtubeCallback = async (req, res) => {
     await user.save();
 
     console.log('✅ YouTube account linked successfully');
-    res.redirect(`${frontendUrl}/dashboard?linked=youtube`);
+    res.redirect(`${frontendUrl}/dashboard?success=youtube_linked&message=YouTube account linked successfully`);
 
   } catch (err) {
     console.error('❌ Error during YouTube callback:', err.message);
     console.error('Error stack:', err.stack);
-    res.redirect(`${frontendUrl}/dashboard?error=youtube_auth_failed&details=${encodeURIComponent(err.message)}`);
+    res.redirect(`${frontendUrl}/dashboard?error=youtube_auth_failed&message=${encodeURIComponent(err.message)}`);
   }
 };
 
@@ -412,8 +449,6 @@ export const appleAuth = (req, res) => {
   console.log('Note: Apple Music uses MusicKit.js on frontend');
   
   // Apple Music uses MusicKit.js on frontend for authentication
-  // This endpoint can be used to generate developer token if needed
-  // For now, return instructions
   res.json({
     message: 'Apple Music authentication should be initiated from the frontend using MusicKit.js',
     instructions: 'Use MusicKit.configure() and MusicKit.getInstance().authorize() on the frontend'
