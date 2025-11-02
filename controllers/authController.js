@@ -12,8 +12,12 @@ const generateToken = (id) => {
 };
 
 const getFrontendUrl = () => {
+  // HARDCODED for emergency fix - change this to your actual frontend URL
   const frontendUrl = process.env.FRONTEND_URL || 'https://moodiq.netlify.app';
+  
   console.log('🌐 Frontend URL:', frontendUrl);
+  
+  // Remove trailing slash if present
   return frontendUrl.replace(/\/$/, '');
 };
 
@@ -79,7 +83,7 @@ export const login = (req, res) => {
  * @route   GET /api/auth/callback
  */
 export const spotifyCallback = async (req, res) => {
-  console.log('🔥 ========== SPOTIFY CALLBACK RECEIVED ==========');
+  console.log('📥 ========== SPOTIFY CALLBACK RECEIVED ==========');
   console.log('Full URL:', req.url);
   console.log('Query params:', req.query);
   
@@ -95,12 +99,12 @@ export const spotifyCallback = async (req, res) => {
   // Handle user denial or cancellation
   if (error === 'access_denied') {
     console.log('❌ User denied access or cancelled authorization');
-    return res.redirect(`${frontendUrl}/login?error=access_denied&message=${encodeURIComponent('You cancelled the Spotify authorization')}`);
+    return res.redirect(`${frontendUrl}/login?error=access_denied&message=You cancelled the Spotify authorization`);
   }
 
   if (!code) {
     console.error('❌ No authorization code received');
-    return res.redirect(`${frontendUrl}/login?error=no_code&message=${encodeURIComponent('No authorization code received from Spotify')}`);
+    return res.redirect(`${frontendUrl}/login?error=no_code&message=No authorization code received from Spotify`);
   }
 
   try {
@@ -179,9 +183,7 @@ export const spotifyCallback = async (req, res) => {
       console.error('  - Data:', err.response.data);
     }
     
-    // Properly encode error message
-    const errorMessage = encodeURIComponent(err.message || 'Authentication failed');
-    res.redirect(`${frontendUrl}/login?error=auth_failed&message=${errorMessage}`);
+    res.redirect(`${frontendUrl}/login?error=auth_failed&message=${encodeURIComponent(err.message)}`);
   }
 };
 
@@ -301,16 +303,16 @@ export const youtubeCallback = async (req, res) => {
   const error = req.query.error || null;
   const frontendUrl = getFrontendUrl();
 
-  console.log('🔥 YouTube callback received');
+  console.log('📥 YouTube callback received');
 
   if (error === 'access_denied') {
     console.log('❌ User denied YouTube access');
-    return res.redirect(`${frontendUrl}/dashboard?error=youtube_denied&message=${encodeURIComponent('You cancelled YouTube authorization')}`);
+    return res.redirect(`${frontendUrl}/dashboard?error=youtube_denied&message=You cancelled YouTube authorization`);
   }
 
   if (!code) {
     console.log('❌ No authorization code');
-    return res.redirect(`${frontendUrl}/dashboard?error=youtube_no_code&message=${encodeURIComponent('No authorization code received')}`);
+    return res.redirect(`${frontendUrl}/dashboard?error=youtube_no_code&message=No authorization code received`);
   }
 
   try {
@@ -325,7 +327,7 @@ export const youtubeCallback = async (req, res) => {
 
     const user = await User.findById(userId);
     if (!user) {
-      return res.redirect(`${frontendUrl}/dashboard?error=user_not_found&message=${encodeURIComponent('User session expired')}`);
+      return res.redirect(`${frontendUrl}/dashboard?error=user_not_found&message=User session expired`);
     }
 
     if (!user.authTokens) {
@@ -341,12 +343,11 @@ export const youtubeCallback = async (req, res) => {
     await user.save();
 
     console.log('✅ YouTube account linked successfully');
-    res.redirect(`${frontendUrl}/dashboard?success=youtube_linked&message=${encodeURIComponent('YouTube account linked successfully')}`);
+    res.redirect(`${frontendUrl}/dashboard?success=youtube_linked&message=YouTube account linked successfully`);
 
   } catch (err) {
     console.error('❌ Error during YouTube callback:', err.message);
-    const errorMessage = encodeURIComponent(err.message);
-    res.redirect(`${frontendUrl}/dashboard?error=youtube_auth_failed&message=${errorMessage}`);
+    res.redirect(`${frontendUrl}/dashboard?error=youtube_auth_failed&message=${encodeURIComponent(err.message)}`);
   }
 };
 
