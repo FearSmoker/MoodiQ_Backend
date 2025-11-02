@@ -11,16 +11,7 @@ const generateToken = (id) => {
   });
 };
 
-const getFrontendUrl = () => {
-  // Use FRONTEND_URL from environment, with fallback
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-  
-  // Log the frontend URL being used
-  console.log('🌐 Frontend URL:', frontendUrl);
-  
-  // Remove trailing slash if present
-  return frontendUrl.replace(/\/$/, '');
-};
+const getFrontendUrl = () => process.env.FRONTEND_URL || 'http://localhost:5173';
 
 // =================================================================
 // ### 1. Primary Authentication (Spotify) ###
@@ -52,13 +43,7 @@ const spotifyApi = new SpotifyWebApi({
  * @route   GET /api/auth/login
  */
 export const login = (req, res) => {
-  console.log('🔐 Initiating Spotify login...');
-  console.log('Spotify Client ID:', process.env.SPOTIFY_CLIENT_ID ? 'Set ✓' : 'Missing ✗');
-  console.log('Spotify Redirect URI:', process.env.SPOTIFY_REDIRECT_URI);
-  
   const authorizeURL = spotifyApi.createAuthorizeURL(spotifyScopes, 'state');
-  console.log('🔗 Redirecting to:', authorizeURL);
-  
   res.redirect(authorizeURL);
 };
 
@@ -68,40 +53,24 @@ export const login = (req, res) => {
  */
 export const spotifyCallback = async (req, res) => {
   const code = req.query.code || null;
-  const error = req.query.error || null;
   const frontendUrl = getFrontendUrl();
 
-  console.log('📥 Spotify callback received');
-  console.log('Code present:', !!code);
-  console.log('Error:', error);
-
-  // Handle user denial
-  if (error === 'access_denied') {
-    console.log('❌ User denied access');
-    return res.redirect(`${frontendUrl}/login?error=access_denied`);
-  }
-
   if (!code) {
-    console.error('❌ No authorization code received');
     return res.redirect(`${frontendUrl}/login?error=no_code`);
   }
 
   try {
-    console.log('🔄 Exchanging code for tokens...');
     const data = await spotifyApi.authorizationCodeGrant(code);
     const { access_token, refresh_token, expires_in } = data.body;
 
     spotifyApi.setAccessToken(access_token);
     spotifyApi.setRefreshToken(refresh_token);
 
-    console.log('📝 Fetching user profile...');
     const me = await spotifyApi.getMe();
     const spotifyId = me.body.id;
     const email = me.body.email;
     const displayName = me.body.display_name;
     const avatarUrl = me.body.images && me.body.images.length > 0 ? me.body.images[0].url : null;
-
-    console.log('✅ Successfully authenticated user:', displayName);
 
     let user = await User.findOne({ spotifyId });
 
@@ -114,7 +83,6 @@ export const spotifyCallback = async (req, res) => {
       user.email = email;
       user.avatarUrl = avatarUrl;
       await user.save();
-      console.log('🔄 Updated existing user');
     } else {
       // Create new user
       user = await User.create({
@@ -126,20 +94,15 @@ export const spotifyCallback = async (req, res) => {
         refreshToken: refresh_token,
         tokenExpires: Date.now() + expires_in * 1000,
       });
-      console.log('🆕 Created new user');
     }
 
     const token = generateToken(user._id);
 
-    // Redirect to frontend callback page with JWT
-    const redirectUrl = `${frontendUrl}/callback?token=${token}`;
-    console.log('🔀 Redirecting to:', redirectUrl);
-    
-    res.redirect(redirectUrl);
+    // Redirect to frontend with JWT
+    res.redirect(`${frontendUrl}/dashboard?token=${token}`);
 
   } catch (err) {
-    console.error('❌ Error during Spotify callback:', err.message);
-    console.error('Full error:', err);
+    console.error('Error during Spotify callback:', err.message);
     res.redirect(`${frontendUrl}/login?error=auth_failed`);
   }
 };
@@ -362,6 +325,7 @@ export const appleAuth = (req, res) => {
  */
 export const appleToken = async (req, res) => {
   const { musicUserToken } = req.body;
+  const frontendUrl = getFrontendUrl();
 
   if (!musicUserToken) {
     return res.status(400).json({ message: 'No Apple Music user token provided' });
