@@ -5,7 +5,6 @@ const sharedPlaylistSchema = new mongoose.Schema({
     type: String,
     required: true,
     unique: true,
-    index: true,
   },
   playlistId: {
     type: String,
@@ -42,7 +41,6 @@ const sharedPlaylistSchema = new mongoose.Schema({
 });
 
 // Indexes
-sharedPlaylistSchema.index({ shareId: 1 });
 sharedPlaylistSchema.index({ owner: 1, createdAt: -1 });
 sharedPlaylistSchema.index({ createdAt: -1 });
 

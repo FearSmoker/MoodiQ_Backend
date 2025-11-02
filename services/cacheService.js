@@ -7,8 +7,19 @@ let isConnected = false;
  * Connect to Redis
  */
 export const connectRedis = async () => {
+  // Check if caching is enabled
+  if (process.env.ENABLE_CACHE === 'false') {
+    console.log('⚠️ Redis caching is disabled');
+    return null;
+  }
+
   try {
-    const redisUrl = process.env.REDIS_URL || `redis://${process.env.REDIS_HOST || 'localhost'}:${process.env.REDIS_PORT || 6379}`;
+    const redisUrl = process.env.REDIS_URL;
+    
+    if (!redisUrl) {
+      console.warn('⚠️ REDIS_URL not configured. Caching disabled.');
+      return null;
+    }
     
     redisClient = createClient({
       url: redisUrl,
