@@ -12,14 +12,11 @@ const generateToken = (id) => {
 };
 
 const getFrontendUrl = () => {
-  // IMPORTANT: Make sure FRONTEND_URL is set in production
-  const frontendUrl = process.env.FRONTEND_URL;
+  // Use FRONTEND_URL from environment, with fallback
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
   
-  if (!frontendUrl) {
-    console.error('⚠️ WARNING: FRONTEND_URL environment variable is not set!');
-    console.error('Falling back to localhost - this will NOT work in production!');
-    return 'http://localhost:5173';
-  }
+  // Log the frontend URL being used
+  console.log('🌐 Frontend URL:', frontendUrl);
   
   // Remove trailing slash if present
   return frontendUrl.replace(/\/$/, '');
@@ -56,9 +53,12 @@ const spotifyApi = new SpotifyWebApi({
  */
 export const login = (req, res) => {
   console.log('🔐 Initiating Spotify login...');
-  console.log('Redirect URI configured:', process.env.SPOTIFY_REDIRECT_URI);
+  console.log('Spotify Client ID:', process.env.SPOTIFY_CLIENT_ID ? 'Set ✓' : 'Missing ✗');
+  console.log('Spotify Redirect URI:', process.env.SPOTIFY_REDIRECT_URI);
   
   const authorizeURL = spotifyApi.createAuthorizeURL(spotifyScopes, 'state');
+  console.log('🔗 Redirecting to:', authorizeURL);
+  
   res.redirect(authorizeURL);
 };
 
@@ -68,11 +68,18 @@ export const login = (req, res) => {
  */
 export const spotifyCallback = async (req, res) => {
   const code = req.query.code || null;
+  const error = req.query.error || null;
   const frontendUrl = getFrontendUrl();
 
   console.log('📥 Spotify callback received');
-  console.log('Frontend URL:', frontendUrl);
   console.log('Code present:', !!code);
+  console.log('Error:', error);
+
+  // Handle user denial
+  if (error === 'access_denied') {
+    console.log('❌ User denied access');
+    return res.redirect(`${frontendUrl}/login?error=access_denied`);
+  }
 
   if (!code) {
     console.error('❌ No authorization code received');
@@ -80,12 +87,14 @@ export const spotifyCallback = async (req, res) => {
   }
 
   try {
+    console.log('🔄 Exchanging code for tokens...');
     const data = await spotifyApi.authorizationCodeGrant(code);
     const { access_token, refresh_token, expires_in } = data.body;
 
     spotifyApi.setAccessToken(access_token);
     spotifyApi.setRefreshToken(refresh_token);
 
+    console.log('📝 Fetching user profile...');
     const me = await spotifyApi.getMe();
     const spotifyId = me.body.id;
     const email = me.body.email;
@@ -122,7 +131,7 @@ export const spotifyCallback = async (req, res) => {
 
     const token = generateToken(user._id);
 
-    // Redirect to frontend with JWT
+    // Redirect to frontend callback page with JWT
     const redirectUrl = `${frontendUrl}/callback?token=${token}`;
     console.log('🔀 Redirecting to:', redirectUrl);
     
@@ -130,6 +139,7 @@ export const spotifyCallback = async (req, res) => {
 
   } catch (err) {
     console.error('❌ Error during Spotify callback:', err.message);
+    console.error('Full error:', err);
     res.redirect(`${frontendUrl}/login?error=auth_failed`);
   }
 };
