@@ -13,7 +13,6 @@ const generateToken = (id) => {
 
 const getFrontendUrl = () => {
   const frontendUrl = process.env.FRONTEND_URL || 'https://moodiq.netlify.app';
-  console.log('🌐 Frontend URL:', frontendUrl);
   return frontendUrl.replace(/\/$/, '');
 };
 
@@ -43,21 +42,19 @@ const spotifyApi = new SpotifyWebApi({
 });
 
 /**
- * @desc    Initiate Spotify login - MUST show consent screen
+ * @desc    Initiate Spotify login
  * @route   GET /api/auth/login
+ * @access  Public
  */
 export const login = (req, res) => {
-  console.log('\n' + '='.repeat(70));
-  console.log('🔐 SPOTIFY LOGIN INITIATED');
-  console.log('='.repeat(70));
-  console.log('📍 Environment:', process.env.NODE_ENV);
-  console.log('🔑 Client ID:', process.env.SPOTIFY_CLIENT_ID ? `${process.env.SPOTIFY_CLIENT_ID.substring(0, 15)}...` : '❌ MISSING');
-  console.log('🔒 Client Secret:', process.env.SPOTIFY_CLIENT_SECRET ? '✓ Configured' : '❌ MISSING');
-  console.log('🔄 Redirect URI:', process.env.SPOTIFY_REDIRECT_URI);
-  console.log('🌐 Frontend URL:', process.env.FRONTEND_URL);
+  console.log('\n🔐 ========== SPOTIFY LOGIN INITIATED ==========');
+  console.log('Environment:', process.env.NODE_ENV);
+  console.log('Spotify Client ID:', process.env.SPOTIFY_CLIENT_ID ? 'Set ✓' : '❌ MISSING');
+  console.log('Spotify Redirect URI:', process.env.SPOTIFY_REDIRECT_URI);
+  console.log('Frontend URL:', process.env.FRONTEND_URL);
   
   if (!process.env.SPOTIFY_CLIENT_ID || !process.env.SPOTIFY_CLIENT_SECRET) {
-    console.error('❌ CRITICAL: Spotify credentials missing!');
+    console.error('❌ Spotify credentials missing!');
     return res.status(500).json({ 
       error: 'Server configuration error',
       message: 'Spotify credentials not configured'
@@ -65,130 +62,83 @@ export const login = (req, res) => {
   }
   
   try {
-    // CRITICAL: Generate unique state for each request
+    // Generate state for security
     const state = Buffer.from(JSON.stringify({ 
       timestamp: Date.now(),
       random: Math.random().toString(36).substring(7)
     })).toString('base64');
     
-    // Create authorization URL that will DEFINITELY show consent screen
-    // The key is to use show_dialog=true parameter
+    // Create authorization URL with show_dialog=true to force consent screen
     const authorizeURL = spotifyApi.createAuthorizeURL(spotifyScopes, state, true);
     
-    console.log('✅ Authorization URL generated');
-    console.log('🔗 URL:', authorizeURL);
-    console.log('📤 Redirecting to Spotify consent screen...');
-    console.log('⚠️  USER SHOULD SEE SPOTIFY\'S OFFICIAL CONSENT SCREEN NOW');
-    console.log('='.repeat(70) + '\n');
-    
-    // NO DATABASE OPERATIONS HERE
+    console.log('✅ Redirecting to Spotify consent screen...');
     res.redirect(authorizeURL);
     
   } catch (err) {
-    console.error('❌ Error creating Spotify authorization URL:', err.message);
-    console.error('Stack:', err.stack);
-    console.log('='.repeat(70) + '\n');
-    
+    console.error('❌ Error:', err.message);
     const frontendUrl = getFrontendUrl();
-    res.redirect(`${frontendUrl}/?error=spotify_config_error`);
+    res.redirect(`${frontendUrl}/?error=config_error&message=${encodeURIComponent('Failed to initialize login')}`);
   }
 };
 
 /**
- * @desc    Handle Spotify callback - ONLY create user AFTER authorization
+ * @desc    Handle Spotify callback
  * @route   GET /api/auth/callback
+ * @access  Public
  */
 export const spotifyCallback = async (req, res) => {
-  console.log('\n' + '='.repeat(70));
-  console.log('🔥 SPOTIFY CALLBACK RECEIVED');
-  console.log('='.repeat(70));
-  console.log('📍 Request URL:', req.url);
-  console.log('📦 Query Parameters:', JSON.stringify(req.query, null, 2));
+  console.log('\n🔥 ========== SPOTIFY CALLBACK RECEIVED ==========');
   
   const code = req.query.code || null;
   const error = req.query.error || null;
-  const state = req.query.state || null;
   const frontendUrl = getFrontendUrl();
 
-  console.log('🔍 Analysis:');
-  console.log('   - Authorization Code:', code ? `Present (${code.length} chars)` : '❌ MISSING');
-  console.log('   - Error:', error || 'None');
-  console.log('   - State:', state ? 'Present' : 'None');
-
-  // ============================================
-  // SCENARIO 1: User Cancelled
-  // ============================================
+  // User cancelled authorization
   if (error === 'access_denied') {
-    console.log('\n🚫 USER CANCELLED AUTHORIZATION');
-    console.log('   Action: Redirecting to homepage');
-    console.log('   Note: NO user will be created in database');
-    console.log('='.repeat(70) + '\n');
-    
+    console.log('❌ User cancelled authorization');
     return res.redirect(`${frontendUrl}/?cancelled=true`);
   }
 
-  // ============================================
-  // SCENARIO 2: No Code (Invalid Request)
-  // ============================================
+  // No authorization code
   if (!code) {
-    console.error('\n❌ INVALID CALLBACK - No authorization code');
-    console.log('='.repeat(70) + '\n');
-    
+    console.error('❌ No authorization code received');
     return res.redirect(`${frontendUrl}/?error=no_code&message=${encodeURIComponent('Authorization failed')}`);
   }
 
-  // ============================================
-  // SCENARIO 3: User Authorized - Proceed
-  // ============================================
-  console.log('\n✅ User authorized! Processing...');
-  
   try {
     // Step 1: Exchange code for tokens
-    console.log('\n📤 Step 1: Exchanging authorization code for tokens...');
-    
+    console.log('🔄 Exchanging code for tokens...');
     const data = await spotifyApi.authorizationCodeGrant(code);
     const { access_token, refresh_token, expires_in } = data.body;
 
     if (!access_token || !refresh_token) {
-      throw new Error('Missing tokens in Spotify response');
+      throw new Error('Missing tokens from Spotify');
     }
 
-    console.log('✅ Tokens received:');
-    console.log('   - Access Token: ✓ (' + access_token.length + ' chars)');
-    console.log('   - Refresh Token: ✓ (' + refresh_token.length + ' chars)');
-    console.log('   - Expires In: ' + expires_in + ' seconds');
+    console.log('✅ Tokens received');
 
+    // Set tokens for API calls
     spotifyApi.setAccessToken(access_token);
     spotifyApi.setRefreshToken(refresh_token);
 
-    // Step 2: Fetch user profile from Spotify
-    console.log('\n📤 Step 2: Fetching user profile from Spotify...');
-    
+    // Step 2: Fetch user profile
+    console.log('👤 Fetching user profile...');
     const me = await spotifyApi.getMe();
     
-    if (!me.body || !me.body.id) {
-      throw new Error('Invalid user profile response from Spotify');
-    }
-
     const spotifyId = me.body.id;
     const email = me.body.email;
     const displayName = me.body.display_name || 'Spotify User';
-    const avatarUrl = me.body.images && me.body.images.length > 0 ? me.body.images[0].url : null;
+    const avatarUrl = me.body.images?.[0]?.url || null;
 
-    console.log('✅ User profile retrieved:');
-    console.log('   - Name: ' + displayName);
-    console.log('   - Spotify ID: ' + spotifyId);
-    console.log('   - Email: ' + email);
+    console.log('✅ User profile retrieved:', displayName);
 
-    // Step 3: Database operations - ONLY NOW!
-    console.log('\n📤 Step 3: Database operations...');
-    console.log('⚠️  THIS IS THE ONLY POINT WHERE DATABASE IS TOUCHED');
+    // Step 3: Create or update user in database
+    console.log('💾 Database operation...');
     
     let user = await User.findOne({ spotifyId });
 
     if (user) {
-      console.log('📝 Existing user found - updating tokens...');
-      
+      console.log('🔄 Updating existing user...');
       user.accessToken = access_token;
       user.refreshToken = refresh_token;
       user.tokenExpires = Date.now() + expires_in * 1000;
@@ -196,15 +146,10 @@ export const spotifyCallback = async (req, res) => {
       user.email = email;
       user.avatarUrl = avatarUrl;
       user.lastActive = Date.now();
-      
       await user.save();
-      
-      console.log('✅ User updated (ID: ' + user._id + ')');
-      
+      console.log('✅ User updated');
     } else {
-      console.log('🆕 New user - creating in database...');
-      console.log('⚠️  USER CREATION HAPPENS ONLY AFTER SPOTIFY AUTHORIZATION');
-      
+      console.log('🆕 Creating new user...');
       user = await User.create({
         spotifyId,
         email,
@@ -214,51 +159,39 @@ export const spotifyCallback = async (req, res) => {
         refreshToken: refresh_token,
         tokenExpires: Date.now() + expires_in * 1000,
       });
-      
-      console.log('✅ New user created (ID: ' + user._id + ')');
+      console.log('✅ New user created');
     }
 
-    // Step 4: Generate JWT for frontend
-    console.log('\n📤 Step 4: Generating JWT token...');
-    
+    // Step 4: Generate JWT token
+    console.log('🔐 Generating JWT...');
     const token = generateToken(user._id);
-    console.log('✅ JWT generated (length: ' + token.length + ')');
 
     // Step 5: Redirect to frontend with token
-    console.log('\n📤 Step 5: Final redirect to frontend...');
-    
     const redirectUrl = `${frontendUrl}/auth/callback?token=${token}`;
-    
-    console.log('🔀 Redirecting to: ' + redirectUrl);
-    console.log('\n✅ ========== AUTHENTICATION SUCCESSFUL ==========');
-    console.log('='.repeat(70) + '\n');
+    console.log('✅ Redirecting to frontend');
+    console.log('='.repeat(50) + '\n');
     
     return res.redirect(redirectUrl);
 
   } catch (err) {
-    console.error('\n' + '='.repeat(70));
-    console.error('❌ AUTHENTICATION FAILED');
-    console.error('='.repeat(70));
-    console.error('Error Type:', err.name);
-    console.error('Error Message:', err.message);
+    console.error('\n❌ ========== AUTH FAILED ==========');
+    console.error('Error:', err.message);
+    console.error('Stack:', err.stack);
     
     if (err.response) {
-      console.error('Spotify API Error:');
-      console.error('  Status:', err.response.status);
-      console.error('  Data:', JSON.stringify(err.response.data, null, 2));
+      console.error('Spotify Response:', err.response.status, err.response.data);
     }
     
-    console.error('Stack Trace:', err.stack);
-    console.error('='.repeat(70) + '\n');
-    
-    const errorMessage = encodeURIComponent(err.message || 'Authentication failed');
-    return res.redirect(`${frontendUrl}/?error=auth_failed&message=${errorMessage}`);
+    // Send proper error message
+    const errorMsg = err.message || 'Authentication failed';
+    return res.redirect(`${frontendUrl}/?error=auth_failed&message=${encodeURIComponent(errorMsg)}`);
   }
 };
 
 /**
  * @desc    Refresh Spotify access token
  * @route   POST /api/auth/refresh
+ * @access  Public
  */
 export const refreshToken = async (req, res) => {
   const { refreshToken } = req.body;
@@ -266,7 +199,6 @@ export const refreshToken = async (req, res) => {
   console.log('🔄 Token refresh requested');
   
   if (!refreshToken) {
-    console.log('❌ No refresh token provided');
     return res.status(401).json({ message: 'No refresh token provided' });
   }
 
@@ -277,11 +209,8 @@ export const refreshToken = async (req, res) => {
   });
 
   try {
-    console.log('🔄 Refreshing access token...');
     const data = await spotifyRefreshApi.refreshAccessToken();
     const { access_token, expires_in } = data.body;
-    
-    console.log('✅ Token refresh successful');
     
     const user = await User.findOneAndUpdate(
       { refreshToken }, 
@@ -293,18 +222,17 @@ export const refreshToken = async (req, res) => {
     );
 
     if (!user) {
-      console.log('❌ User not found for refresh token');
       return res.status(404).json({ message: 'User not found' });
     }
     
-    console.log('✅ User tokens updated in database');
+    console.log('✅ Token refreshed for user:', user.displayName);
     
     res.json({
       accessToken: access_token,
       expiresIn: expires_in,
     });
   } catch (err) {
-    console.error('❌ Could not refresh access token:', err.message);
+    console.error('❌ Token refresh failed:', err.message);
     res.status(400).json({ message: 'Failed to refresh token' });
   }
 };
@@ -312,6 +240,7 @@ export const refreshToken = async (req, res) => {
 /**
  * @desc    Get logged in user's details
  * @route   GET /api/auth/me
+ * @access  Protected
  */
 export const getMe = async (req, res) => {
   try {
@@ -345,7 +274,7 @@ const googleScopes = [
 ];
 
 export const youtubeAuth = (req, res) => {
-  console.log('📺 Initiating YouTube auth for user:', req.user._id);
+  console.log('📺 YouTube auth for user:', req.user._id);
   
   try {
     const state = Buffer.from(JSON.stringify({ userId: req.user._id })).toString('base64');
@@ -357,10 +286,9 @@ export const youtubeAuth = (req, res) => {
       state: state,
     });
     
-    console.log('🔗 Redirecting to Google OAuth');
     res.redirect(authUrl);
   } catch (err) {
-    console.error('❌ Error creating YouTube auth URL:', err.message);
+    console.error('❌ YouTube auth error:', err.message);
     const frontendUrl = getFrontendUrl();
     res.redirect(`${frontendUrl}/dashboard?error=youtube_config_error`);
   }
@@ -372,16 +300,12 @@ export const youtubeCallback = async (req, res) => {
   const error = req.query.error || null;
   const frontendUrl = getFrontendUrl();
 
-  console.log('📥 YouTube callback received');
-
   if (error === 'access_denied') {
-    console.log('❌ User denied YouTube access');
-    return res.redirect(`${frontendUrl}/dashboard?error=youtube_denied&message=${encodeURIComponent('You cancelled YouTube authorization')}`);
+    return res.redirect(`${frontendUrl}/dashboard?error=youtube_denied&message=${encodeURIComponent('YouTube authorization cancelled')}`);
   }
 
   if (!code) {
-    console.log('❌ No authorization code');
-    return res.redirect(`${frontendUrl}/dashboard?error=youtube_no_code&message=${encodeURIComponent('No authorization code received')}`);
+    return res.redirect(`${frontendUrl}/dashboard?error=youtube_no_code&message=${encodeURIComponent('No authorization code')}`);
   }
 
   try {
@@ -396,7 +320,7 @@ export const youtubeCallback = async (req, res) => {
 
     const user = await User.findById(userId);
     if (!user) {
-      return res.redirect(`${frontendUrl}/dashboard?error=user_not_found&message=${encodeURIComponent('User session expired')}`);
+      return res.redirect(`${frontendUrl}/dashboard?error=user_not_found`);
     }
 
     if (!user.authTokens) {
@@ -411,12 +335,12 @@ export const youtubeCallback = async (req, res) => {
     
     await user.save();
 
-    console.log('✅ YouTube account linked successfully');
-    res.redirect(`${frontendUrl}/dashboard?success=youtube_linked&message=${encodeURIComponent('YouTube account linked successfully')}`);
+    console.log('✅ YouTube linked for:', user.displayName);
+    res.redirect(`${frontendUrl}/dashboard?success=youtube_linked`);
 
   } catch (err) {
-    console.error('❌ Error during YouTube callback:', err.message);
-    res.redirect(`${frontendUrl}/dashboard?error=youtube_auth_failed&message=${encodeURIComponent(err.message)}`);
+    console.error('❌ YouTube callback error:', err.message);
+    res.redirect(`${frontendUrl}/dashboard?error=youtube_failed&message=${encodeURIComponent(err.message)}`);
   }
 };
 
@@ -454,7 +378,7 @@ export const refreshYoutubeToken = async (req, res) => {
     });
 
   } catch (err) {
-    console.error('❌ Error refreshing YouTube token:', err.message);
+    console.error('❌ YouTube token refresh failed:', err.message);
     res.status(500).json({ message: 'Failed to refresh YouTube token' });
   }
 };
@@ -462,7 +386,6 @@ export const refreshYoutubeToken = async (req, res) => {
 export const appleAuth = (req, res) => {
   res.json({
     message: 'Apple Music authentication should be initiated from the frontend using MusicKit.js',
-    instructions: 'Use MusicKit.configure() and MusicKit.getInstance().authorize() on the frontend'
   });
 };
 
@@ -494,12 +417,12 @@ export const appleToken = async (req, res) => {
 
     res.json({ 
       success: true, 
-      message: 'Apple Music account linked successfully' 
+      message: 'Apple Music linked successfully' 
     });
 
   } catch (err) {
-    console.error('❌ Error saving Apple Music token:', err.message);
-    res.status(500).json({ message: 'Failed to link Apple Music account' });
+    console.error('❌ Apple Music link failed:', err.message);
+    res.status(500).json({ message: 'Failed to link Apple Music' });
   }
 };
 
@@ -524,11 +447,11 @@ export const unlinkService = async (req, res) => {
 
     res.json({ 
       success: true, 
-      message: `${service} account unlinked successfully` 
+      message: `${service} unlinked successfully` 
     });
 
   } catch (err) {
-    console.error(`❌ Error unlinking ${service}:`, err.message);
-    res.status(500).json({ message: `Failed to unlink ${service} account` });
+    console.error(`❌ Unlink ${service} failed:`, err.message);
+    res.status(500).json({ message: `Failed to unlink ${service}` });
   }
 };

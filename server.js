@@ -10,6 +10,8 @@ import authRoutes from './routes/authRoutes.js';
 import playlistRoutes from './routes/playlistRoutes.js';
 import transferRoutes from './routes/transferRoutes.js';
 import userRoutes from './routes/userRoutes.js';
+import dashboardRoutes from './routes/dashboardRoutes.js'; // NEW
+import analyticsRoutes from './routes/analyticsRoutes.js'; // NEW
 
 // Load services
 import { initSocketService } from './services/socketService.js';
@@ -37,7 +39,7 @@ const corsOptions = {
     if (allowedOrigins.indexOf(origin) !== -1 || process.env.CORS_ORIGIN === '*') {
       callback(null, true);
     } else {
-      callback(null, true); // Allow all in production
+      callback(null, true);
     }
   },
   credentials: true,
@@ -49,7 +51,7 @@ app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Request logging middleware (skip health checks and favicon)
+// Request logging middleware (skip health checks)
 app.use((req, res, next) => {
   if (req.path !== '/health' && req.path !== '/favicon.ico') {
     console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
@@ -57,7 +59,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Health check route (COMPLETELY SILENT - no logs)
+// Health check route
 app.get('/health', (req, res) => {
   res.status(200).json({ 
     status: 'ok', 
@@ -66,7 +68,7 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Favicon route (prevent 404 spam)
+// Favicon route
 app.get('/favicon.ico', (req, res) => {
   res.status(204).end();
 });
@@ -76,11 +78,13 @@ app.use('/api/auth', authRoutes);
 app.use('/api/playlists', playlistRoutes);
 app.use('/api/transfer', transferRoutes);
 app.use('/api/user', userRoutes);
+app.use('/api/dashboard', dashboardRoutes); // NEW
+app.use('/api/analytics', analyticsRoutes); // NEW
 
 // Root route
 app.get('/', (req, res) => {
   res.json({
-    name: 'Moodify-AI Backend API',
+    name: 'MoodiQ-AI Backend API',
     version: '1.0.0',
     status: 'running',
     endpoints: {
@@ -89,6 +93,8 @@ app.get('/', (req, res) => {
       playlists: '/api/playlists',
       transfer: '/api/transfer',
       user: '/api/user',
+      dashboard: '/api/dashboard',
+      analytics: '/api/analytics',
     },
   });
 });
@@ -126,8 +132,7 @@ mongoose.connect(process.env.MONGO_URI)
     console.log('✅ Connected to MongoDB');
     console.log('📊 Database:', mongoose.connection.name);
     
-    // Connect to Redis (optional, won't crash if unavailable)
-    // Only try to connect if Redis is enabled
+    // Connect to Redis (optional)
     if (process.env.ENABLE_CACHE === 'true' && process.env.REDIS_URL) {
       connectRedis()
         .then(() => console.log('✅ Connected to Redis'))
@@ -141,31 +146,22 @@ mongoose.connect(process.env.MONGO_URI)
     
     // Start server
     server.listen(PORT, () => {
-      console.log('\n' + '='.repeat(50));
-      console.log('🚀 Moodify-AI Backend Server Started');
-      console.log('='.repeat(50));
+      console.log('\n' + '='.repeat(60));
+      console.log('🚀 MoodiQ-AI Backend Server Started');
+      console.log('='.repeat(60));
       console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
       console.log(`🔗 Server: http://localhost:${PORT}`);
       console.log(`📡 WebSocket: ws://localhost:${PORT}/ws`);
       console.log(`🎯 Frontend: ${process.env.FRONTEND_URL || 'Not set'}`);
-      console.log('='.repeat(50) + '\n');
-      
-      // Log critical environment variables
-      console.log('⚙️ Configuration Check:');
-      console.log(`  - FRONTEND_URL: ${process.env.FRONTEND_URL ? '✓' : '❌ MISSING'}`);
-      console.log(`  - SPOTIFY_CLIENT_ID: ${process.env.SPOTIFY_CLIENT_ID ? '✓' : '❌ MISSING'}`);
-      console.log(`  - SPOTIFY_CLIENT_SECRET: ${process.env.SPOTIFY_CLIENT_SECRET ? '✓' : '❌ MISSING'}`);
-      console.log(`  - SPOTIFY_REDIRECT_URI: ${process.env.SPOTIFY_REDIRECT_URI ? '✓' : '❌ MISSING'}`);
-      console.log(`  - MONGO_URI: ${process.env.MONGO_URI ? '✓' : '❌ MISSING'}`);
-      console.log(`  - JWT_SECRET: ${process.env.JWT_SECRET ? '✓' : '❌ MISSING'}`);
-      console.log('');
-      
-      if (!process.env.FRONTEND_URL) {
-        console.error('❌ WARNING: FRONTEND_URL is not set! Authentication will fail.');
-      }
-      if (!process.env.SPOTIFY_CLIENT_ID || !process.env.SPOTIFY_CLIENT_SECRET) {
-        console.error('❌ WARNING: Spotify credentials not set! Authentication will fail.');
-      }
+      console.log('='.repeat(60));
+      console.log('\n📋 Available API Endpoints:');
+      console.log('   /api/auth          - Authentication');
+      console.log('   /api/playlists     - Playlist management');
+      console.log('   /api/transfer      - Cross-platform transfer');
+      console.log('   /api/user          - User preferences & sharing');
+      console.log('   /api/dashboard     - Dashboard data & stats');
+      console.log('   /api/analytics     - Real-time analytics');
+      console.log('='.repeat(60) + '\n');
     });
   })
   .catch((err) => {
@@ -186,7 +182,6 @@ const gracefulShutdown = () => {
     });
   });
 
-  // Force shutdown after 10 seconds
   setTimeout(() => {
     console.error('⚠️ Forced shutdown');
     process.exit(1);
