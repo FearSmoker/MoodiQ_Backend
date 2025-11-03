@@ -1,3 +1,7 @@
+import axios from 'axios';
+
+const ML_API_URL = process.env.ML_API_URL || 'http://localhost:8000';
+
 /**
  * @desc    Fetch and analyze lyrics for tracks
  * @route   POST /api/lyrics/analyze

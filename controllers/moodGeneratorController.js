@@ -1,3 +1,8 @@
+import axios from 'axios';
+import SpotifyWebApi from 'spotify-web-api-node';
+
+const ML_API_URL = process.env.ML_API_URL || 'http://localhost:8000';
+
 /**
  * @desc    Generate playlist based on mood/activity
  * @route   POST /api/mood-generator/generate

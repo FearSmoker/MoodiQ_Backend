@@ -33,8 +33,10 @@ const spotifyScopes = [
   'user-read-recently-played',
   'user-library-read',
   'user-library-modify',
+  'streaming',
 ];
 
+// Create a single Spotify API instance for auth operations
 const spotifyApi = new SpotifyWebApi({
   clientId: process.env.SPOTIFY_CLIENT_ID,
   clientSecret: process.env.SPOTIFY_CLIENT_SECRET,
@@ -64,28 +66,26 @@ export const login = (req, res) => {
 
   // CRITICAL: Validate redirect URI matches environment
   const configuredRedirectUri = process.env.SPOTIFY_REDIRECT_URI;
-  if (!configuredRedirectUri || !configuredRedirectUri.includes('moodiq-backend')) {
+  if (!configuredRedirectUri) {
     console.error('❌ Invalid redirect URI configuration!');
-    console.error('Expected format: https://moodiq-backend.onrender.com/api/auth/callback');
-    console.error('Got:', configuredRedirectUri);
     return res.status(500).json({
       error: 'Configuration error',
-      message: 'Redirect URI mismatch'
+      message: 'Redirect URI not configured'
     });
   }
   
   try {
-    // Generate state for security (includes timestamp for debugging)
+    // Generate state for CSRF protection
     const state = Buffer.from(JSON.stringify({ 
       timestamp: Date.now(),
       random: Math.random().toString(36).substring(7)
     })).toString('base64');
     
-    // Create authorization URL with show_dialog=true to force consent screen
+    // Create authorization URL - set show_dialog to true for testing
     const authorizeURL = spotifyApi.createAuthorizeURL(spotifyScopes, state, true);
     
     console.log('✅ Authorization URL generated');
-    console.log('Redirecting to:', authorizeURL.substring(0, 100) + '...');
+    console.log('Full URL:', authorizeURL);
     console.log('='.repeat(50));
     
     res.redirect(authorizeURL);
@@ -107,11 +107,7 @@ export const spotifyCallback = async (req, res) => {
   console.log('\n🔥 ========== SPOTIFY CALLBACK RECEIVED ==========');
   console.log('Timestamp:', new Date().toISOString());
   console.log('Query params:', JSON.stringify(req.query, null, 2));
-  console.log('Headers:', JSON.stringify({
-    host: req.headers.host,
-    origin: req.headers.origin,
-    referer: req.headers.referer
-  }, null, 2));
+  console.log('Full URL:', req.protocol + '://' + req.get('host') + req.originalUrl);
   
   const code = req.query.code || null;
   const error = req.query.error || null;
@@ -122,6 +118,12 @@ export const spotifyCallback = async (req, res) => {
   if (error === 'access_denied') {
     console.log('❌ User cancelled authorization');
     return res.redirect(`${frontendUrl}/?cancelled=true`);
+  }
+
+  // Check for any error
+  if (error) {
+    console.error('❌ Spotify returned error:', error);
+    return res.redirect(`${frontendUrl}/?error=${error}&message=${encodeURIComponent('Authorization failed')}`);
   }
 
   // No authorization code
@@ -135,9 +137,12 @@ export const spotifyCallback = async (req, res) => {
     // Step 1: Exchange code for tokens
     console.log('🔄 Step 1: Exchanging authorization code for tokens...');
     console.log('Using redirect URI:', process.env.SPOTIFY_REDIRECT_URI);
-    console.log('Code (first 20 chars):', code.substring(0, 20) + '...');
+    console.log('Using client ID:', process.env.SPOTIFY_CLIENT_ID?.substring(0, 10) + '...');
+    console.log('Code length:', code.length);
     
+    // CRITICAL: Use the same spotifyApi instance with credentials already set
     const data = await spotifyApi.authorizationCodeGrant(code);
+    
     const { access_token, refresh_token, expires_in } = data.body;
 
     if (!access_token || !refresh_token) {
@@ -145,17 +150,18 @@ export const spotifyCallback = async (req, res) => {
     }
 
     console.log('✅ Tokens received successfully');
-    console.log('Access token (first 20 chars):', access_token.substring(0, 20) + '...');
-    console.log('Refresh token (first 20 chars):', refresh_token.substring(0, 20) + '...');
+    console.log('Access token length:', access_token.length);
+    console.log('Refresh token length:', refresh_token.length);
     console.log('Token expires in:', expires_in, 'seconds');
-
-    // Set tokens for API calls
-    spotifyApi.setAccessToken(access_token);
-    spotifyApi.setRefreshToken(refresh_token);
 
     // Step 2: Fetch user profile from Spotify
     console.log('🔄 Step 2: Fetching user profile from Spotify...');
-    const me = await spotifyApi.getMe();
+    
+    // Create a new instance for API calls with the access token
+    const userApi = new SpotifyWebApi();
+    userApi.setAccessToken(access_token);
+    
+    const me = await userApi.getMe();
     
     const spotifyId = me.body.id;
     const email = me.body.email;
@@ -169,17 +175,16 @@ export const spotifyCallback = async (req, res) => {
     console.log('  - Display Name:', displayName);
     console.log('  - Email:', email);
     console.log('  - Product:', product);
-    console.log('  - Country:', country);
 
     // Step 3: Create or update user in database
     console.log('🔄 Step 3: Saving user to database...');
     
+    const tokenExpiry = new Date(Date.now() + expires_in * 1000);
+
     let user = await User.findOne({ spotifyId });
 
-    const tokenExpiry = Date.now() + expires_in * 1000;
-
     if (user) {
-      console.log('📝 Updating existing user in database...');
+      console.log('🔄 Updating existing user in database...');
       console.log('  - Existing user ID:', user._id);
       
       // Update user
@@ -189,7 +194,7 @@ export const spotifyCallback = async (req, res) => {
       user.displayName = displayName;
       user.email = email;
       user.avatarUrl = avatarUrl;
-      user.lastActive = Date.now();
+      user.lastActive = new Date();
       
       await user.save();
       console.log('✅ User updated successfully in database');
@@ -221,12 +226,11 @@ export const spotifyCallback = async (req, res) => {
     // Step 4: Generate JWT token for our app
     console.log('🔄 Step 4: Generating JWT token...');
     const jwtToken = generateToken(user._id);
-    console.log('✅ JWT token generated (first 20 chars):', jwtToken.substring(0, 20) + '...');
+    console.log('✅ JWT token generated');
 
     // Step 5: Redirect to frontend with token
     const redirectUrl = `${frontendUrl}/auth/callback?token=${jwtToken}`;
     console.log('🔄 Step 5: Redirecting to frontend...');
-    console.log('Redirect URL:', redirectUrl.replace(jwtToken, jwtToken.substring(0, 20) + '...'));
     console.log('✅ ========== AUTH SUCCESS ==========');
     console.log('User', displayName, 'authenticated successfully');
     console.log('='.repeat(50) + '\n');
@@ -237,28 +241,27 @@ export const spotifyCallback = async (req, res) => {
     console.error('\n❌ ========== AUTH FAILED ==========');
     console.error('Error name:', err.name);
     console.error('Error message:', err.message);
-    console.error('Stack trace:', err.stack);
+    console.error('Error stack:', err.stack);
     
-    // Log detailed error info
-    if (err.response) {
-      console.error('Spotify API Response:');
-      console.error('  - Status:', err.response.status);
-      console.error('  - Status Text:', err.response.statusText);
-      console.error('  - Data:', JSON.stringify(err.response.data, null, 2));
-    }
-    
+    // Log detailed error info from Spotify
     if (err.body) {
       console.error('Spotify Error Body:', JSON.stringify(err.body, null, 2));
+    }
+    
+    if (err.statusCode) {
+      console.error('Spotify Status Code:', err.statusCode);
     }
     
     // Determine specific error message
     let errorMsg = 'Authentication failed';
     let errorCode = 'auth_failed';
     
-    if (err.message.includes('invalid_grant')) {
-      errorMsg = 'Authorization code expired or already used. Please try again.';
+    const errorMessage = err.message?.toLowerCase() || '';
+    
+    if (errorMessage.includes('invalid_grant') || err.body?.error === 'invalid_grant') {
+      errorMsg = 'Authorization code expired or invalid. Please try logging in again.';
       errorCode = 'invalid_grant';
-    } else if (err.message.includes('redirect_uri')) {
+    } else if (errorMessage.includes('redirect_uri')) {
       errorMsg = 'Redirect URI mismatch. Please contact support.';
       errorCode = 'redirect_uri_mismatch';
     } else if (err.statusCode === 400) {
@@ -268,7 +271,7 @@ export const spotifyCallback = async (req, res) => {
       errorMsg = 'Invalid credentials. Please try again.';
       errorCode = 'invalid_credentials';
     } else {
-      errorMsg = err.message || 'Authentication failed. Please try again.';
+      errorMsg = 'Authentication failed. Please try again.';
     }
     
     console.error('Final error message:', errorMsg);
@@ -282,7 +285,7 @@ export const spotifyCallback = async (req, res) => {
 /**
  * @desc    Refresh Spotify access token
  * @route   POST /api/auth/refresh
- * @access  Public
+ * @access  Protected
  */
 export const refreshToken = async (req, res) => {
   const { refreshToken } = req.body;
@@ -293,24 +296,27 @@ export const refreshToken = async (req, res) => {
     return res.status(401).json({ message: 'No refresh token provided' });
   }
 
-  const spotifyRefreshApi = new SpotifyWebApi({
-    clientId: process.env.SPOTIFY_CLIENT_ID,
-    clientSecret: process.env.SPOTIFY_CLIENT_SECRET,
-    refreshToken: refreshToken,
-  });
-
   try {
-    console.log('Calling Spotify refresh token API...');
-    const data = await spotifyRefreshApi.refreshAccessToken();
+    console.log('Attempting to refresh token...');
+    
+    // Create a new API instance with refresh token
+    const refreshApi = new SpotifyWebApi({
+      clientId: process.env.SPOTIFY_CLIENT_ID,
+      clientSecret: process.env.SPOTIFY_CLIENT_SECRET,
+      refreshToken: refreshToken,
+    });
+
+    const data = await refreshApi.refreshAccessToken();
     const { access_token, expires_in } = data.body;
     
-    console.log('Token refreshed successfully');
+    console.log('✅ Token refreshed successfully');
     
+    // Update user in database
     const user = await User.findOneAndUpdate(
       { refreshToken }, 
       {
         accessToken: access_token,
-        tokenExpires: Date.now() + expires_in * 1000,
+        tokenExpires: new Date(Date.now() + expires_in * 1000),
       },
       { new: true }
     );
@@ -327,7 +333,13 @@ export const refreshToken = async (req, res) => {
     });
   } catch (err) {
     console.error('❌ Token refresh failed:', err.message);
-    res.status(400).json({ message: 'Failed to refresh token' });
+    if (err.body) {
+      console.error('Spotify error:', err.body);
+    }
+    res.status(400).json({ 
+      message: 'Failed to refresh token',
+      error: err.message 
+    });
   }
 };
 

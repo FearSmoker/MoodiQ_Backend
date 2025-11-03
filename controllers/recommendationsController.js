@@ -1,3 +1,8 @@
+import axios from 'axios';
+import SpotifyWebApi from 'spotify-web-api-node';
+
+const ML_API_URL = process.env.ML_API_URL || 'http://localhost:8000';
+
 /**
  * @desc    Get smart mood-based recommendations
  * @route   POST /api/recommendations/mood-based
@@ -84,6 +89,31 @@ async function fallbackMoodRecommendations(req, res, targetMood, seedTracks, see
     console.error('Fallback recommendations failed:', err.message);
     res.status(500).json({ message: 'Failed to get recommendations' });
   }
+}
+
+function getMoodFeatures(targetMood) {
+  const features = {};
+  const moodLower = (targetMood || '').toLowerCase();
+  
+  if (moodLower.includes('happy') || moodLower.includes('joyful')) {
+    features.target_valence = 0.8;
+    features.target_energy = 0.7;
+  } else if (moodLower.includes('sad') || moodLower.includes('melancholy')) {
+    features.target_valence = 0.2;
+    features.target_energy = 0.3;
+  } else if (moodLower.includes('energetic') || moodLower.includes('workout')) {
+    features.target_valence = 0.7;
+    features.target_energy = 0.9;
+  } else if (moodLower.includes('calm') || moodLower.includes('relax')) {
+    features.target_valence = 0.5;
+    features.target_energy = 0.3;
+  } else if (moodLower.includes('focus') || moodLower.includes('study')) {
+    features.target_valence = 0.5;
+    features.target_energy = 0.5;
+    features.target_instrumentalness = 0.7;
+  }
+  
+  return features;
 }
 
 /**

@@ -1,3 +1,5 @@
+import SpotifyWebApi from 'spotify-web-api-node';
+
 /**
  * @desc    Get real-time listening analytics
  * @route   GET /api/realtime/current
