@@ -1,8 +1,6 @@
 import User from '../models/userModel.js';
 import SharedPlaylist from '../models/sharedPlaylistModel.js';
-import axios from 'axios';
-
-const ML_API_URL = process.env.ML_API_URL;
+import * as mlService from '../services/mlService.js';
 
 /**
  * @desc    Get user preferences
@@ -55,7 +53,7 @@ export const updatePreferences = async (req, res) => {
 };
 
 /**
- * @desc    Submit feedback for mood prediction (for ML model retraining)
+ * @desc    Submit feedback for mood prediction (ML model retraining)
  * @route   POST /api/user/feedback
  * @access  Protected
  */
@@ -70,21 +68,11 @@ export const submitFeedback = async (req, res) => {
     console.log(`📝 Submitting feedback for track ${trackId}: ${correctMood}`);
     
     // Send feedback to ML API for incremental learning
-    const feedbackResponse = await axios.post(
-      `${ML_API_URL}/model/feedback`,
-      {
-        user_id: req.user._id.toString(),
-        track_id: trackId,
-        feedback_mood: correctMood,
-        playlist_id: playlistId,
-        timestamp: new Date().toISOString(),
-      },
-      {
-        timeout: 15000,
-        headers: {
-          'Content-Type': 'application/json',
-        }
-      }
+    const feedbackResponse = await mlService.submitFeedback(
+      req.user._id.toString(),
+      trackId,
+      correctMood,
+      playlistId
     );
 
     console.log('✅ Feedback submitted successfully to ML service');
@@ -93,9 +81,9 @@ export const submitFeedback = async (req, res) => {
       message: 'Feedback submitted successfully',
       trackId,
       mood: correctMood,
-      feedbackCount: feedbackResponse.data.user_feedback_count || 0,
-      readyForPersonalization: feedbackResponse.data.ready_for_personalization || false,
-      suggestRetrain: feedbackResponse.data.suggest_retrain || false,
+      feedbackCount: feedbackResponse.user_feedback_count || 0,
+      readyForPersonalization: feedbackResponse.ready_for_personalization || false,
+      suggestRetrain: feedbackResponse.suggest_retrain || false,
     });
   } catch (err) {
     console.error('❌ Error submitting feedback:', err.message);
@@ -117,6 +105,104 @@ export const submitFeedback = async (req, res) => {
     
     res.status(500).json({ 
       message: 'Failed to submit feedback fully',
+      error: err.message 
+    });
+  }
+};
+
+/**
+ * @desc    Submit batch feedback
+ * @route   POST /api/user/feedback/batch
+ * @access  Protected
+ */
+export const submitBatchFeedback = async (req, res) => {
+  const { feedbacks } = req.body;
+
+  if (!feedbacks || !Array.isArray(feedbacks) || feedbacks.length === 0) {
+    return res.status(400).json({ message: 'Feedbacks array is required' });
+  }
+
+  try {
+    console.log(`📝 Submitting batch feedback: ${feedbacks.length} items`);
+    
+    // Format feedback for ML API
+    const formattedFeedbacks = feedbacks.map(fb => ({
+      user_id: req.user._id.toString(),
+      track_id: fb.trackId,
+      feedback_mood: fb.correctMood,
+      playlist_id: fb.playlistId || null,
+      timestamp: new Date().toISOString()
+    }));
+
+    const batchResponse = await mlService.submitBatchFeedback(formattedFeedbacks);
+
+    console.log(`✅ Batch feedback submitted: ${batchResponse.successful}/${batchResponse.total}`);
+
+    res.json({
+      success: true,
+      message: 'Batch feedback submitted',
+      total: batchResponse.total,
+      successful: batchResponse.successful,
+      failed: batchResponse.failed
+    });
+  } catch (err) {
+    console.error('❌ Error submitting batch feedback:', err.message);
+    
+    if (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
+      return res.status(200).json({ 
+        success: false,
+        message: 'ML service unavailable, feedback not processed',
+        warning: 'Please try again later'
+      });
+    }
+    
+    res.status(500).json({ 
+      message: 'Failed to submit batch feedback',
+      error: err.message 
+    });
+  }
+};
+
+/**
+ * @desc    Log user behavior (implicit learning)
+ * @route   POST /api/user/behavior
+ * @access  Protected
+ */
+export const logUserBehavior = async (req, res) => {
+  const { trackId, action, timeOfDay } = req.body;
+
+  if (!trackId || !action) {
+    return res.status(400).json({ message: 'Track ID and action are required' });
+  }
+
+  try {
+    console.log(`📊 Logging behavior: ${action} for track ${trackId}`);
+    
+    const behaviorResponse = await mlService.logUserBehavior(
+      req.user._id.toString(),
+      trackId,
+      action,
+      timeOfDay
+    );
+
+    res.json({
+      success: true,
+      message: 'Behavior logged successfully',
+      dailyStats: behaviorResponse.daily_stats
+    });
+  } catch (err) {
+    console.error('❌ Error logging behavior:', err.message);
+    
+    // Don't fail silently - behavior logging is important
+    if (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
+      return res.json({ 
+        success: false,
+        message: 'ML service unavailable, behavior not logged'
+      });
+    }
+    
+    res.status(500).json({ 
+      message: 'Failed to log behavior',
       error: err.message 
     });
   }
@@ -279,29 +365,20 @@ export const handleVoiceCommand = async (req, res) => {
     console.log(`🗣️ Processing voice command: "${command}"`);
     
     // Send command to ML API for natural language processing
-    const response = await axios.post(
-      `${ML_API_URL}/nlp/command`,
-      {
-        command,
-        context: context || {},
-        user_id: req.user._id.toString(),
-      },
-      {
-        timeout: 15000,
-        headers: {
-          'Content-Type': 'application/json',
-        }
-      }
+    const response = await mlService.processNLPCommand(
+      command,
+      context || {},
+      req.user._id.toString()
     );
 
-    console.log(`✅ NLP command processed: ${response.data.action}`);
+    console.log(`✅ NLP command processed: ${response.action}`);
 
     res.json({
       success: true,
-      action: response.data.action,
-      parameters: response.data.parameters,
-      response: response.data.response,
-      confidence: response.data.confidence || 0.85,
+      action: response.action,
+      parameters: response.parameters,
+      response: response.response,
+      confidence: response.confidence || 0.85,
     });
 
   } catch (err) {
@@ -345,11 +422,7 @@ export const getUserStats = async (req, res) => {
     // Get ML personalization stats
     let mlStats = null;
     try {
-      const mlResponse = await axios.get(
-        `${ML_API_URL}/model/user/${req.user._id}/stats`,
-        { timeout: 10000 }
-      );
-      mlStats = mlResponse.data;
+      mlStats = await mlService.getUserLearningStats(req.user._id.toString());
     } catch (mlError) {
       console.warn('⚠️ Could not fetch ML stats:', mlError.message);
     }
@@ -378,36 +451,98 @@ export const getUserStats = async (req, res) => {
 };
 
 /**
+ * @desc    Get user's mood timeline
+ * @route   GET /api/user/mood-timeline
+ * @access  Protected
+ */
+export const getUserMoodTimeline = async (req, res) => {
+  const { days = 7 } = req.query;
+
+  try {
+    console.log(`📈 Fetching mood timeline for ${days} days`);
+    
+    const timelineResponse = await mlService.getUserMoodTimeline(
+      req.user._id.toString(),
+      parseInt(days)
+    );
+
+    console.log(`✅ Retrieved timeline with ${timelineResponse.timeline.length} data points`);
+
+    res.json(timelineResponse);
+
+  } catch (err) {
+    console.error('❌ Error fetching mood timeline:', err.message);
+    
+    if (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
+      return res.status(503).json({ 
+        message: 'ML service is currently unavailable',
+        code: 'ML_SERVICE_UNAVAILABLE'
+      });
+    }
+
+    res.status(500).json({ 
+      message: 'Failed to fetch mood timeline',
+      error: err.message 
+    });
+  }
+};
+
+/**
+ * @desc    Get user's personalized model info
+ * @route   GET /api/user/personalized-model
+ * @access  Protected
+ */
+export const getUserPersonalizedModel = async (req, res) => {
+  try {
+    console.log(`🧠 Fetching personalized model for user ${req.user._id}`);
+    
+    const modelResponse = await mlService.getUserPersonalizedModel(
+      req.user._id.toString()
+    );
+
+    res.json(modelResponse);
+
+  } catch (err) {
+    console.error('❌ Error fetching personalized model:', err.message);
+    
+    if (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
+      return res.status(503).json({ 
+        message: 'ML service is currently unavailable',
+        code: 'ML_SERVICE_UNAVAILABLE'
+      });
+    }
+
+    res.status(500).json({ 
+      message: 'Failed to fetch personalized model',
+      error: err.message 
+    });
+  }
+};
+
+/**
  * @desc    Trigger personalized model retraining
  * @route   POST /api/user/retrain-model
  * @access  Protected
  */
 export const triggerModelRetrain = async (req, res) => {
+  const { force = false } = req.body;
+
   try {
     console.log(`🔄 Triggering model retraining for user ${req.user._id}`);
     
-    const response = await axios.post(
-      `${ML_API_URL}/model/retrain`,
-      {
-        user_id: req.user._id.toString(),
-        min_samples: 10,
-        force: req.body.force || false,
-      },
-      {
-        timeout: 120000, // 2 minute timeout for training
-        headers: {
-          'Content-Type': 'application/json',
-        }
-      }
+    const response = await mlService.triggerModelRetrain(
+      req.user._id.toString(),
+      10, // min_samples
+      force
     );
 
     console.log('✅ Model retraining initiated');
 
     res.json({
       success: true,
-      message: response.data.message,
-      status: response.data.status,
-      estimatedTime: response.data.estimated_time,
+      message: response.message,
+      status: response.status,
+      estimatedTime: response.estimated_time,
     });
 
   } catch (err) {
@@ -428,5 +563,44 @@ export const triggerModelRetrain = async (req, res) => {
     }
 
     res.status(500).json({ message: 'Failed to trigger model retraining' });
+  }
+};
+
+/**
+ * @desc    Reset user personalization
+ * @route   DELETE /api/user/reset-personalization
+ * @access  Protected
+ */
+export const resetUserPersonalization = async (req, res) => {
+  try {
+    console.log(`🗑️ Resetting personalization for user ${req.user._id}`);
+    
+    const response = await mlService.resetUserPersonalization(
+      req.user._id.toString()
+    );
+
+    console.log('✅ Personalization reset successfully');
+
+    res.json({
+      success: true,
+      message: 'Personalization reset successfully',
+      deletedOverrides: response.deleted_overrides,
+      deletedFeedbackLogs: response.deleted_feedback_logs
+    });
+
+  } catch (err) {
+    console.error('❌ Error resetting personalization:', err.message);
+    
+    if (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
+      return res.status(503).json({ 
+        message: 'ML service is currently unavailable',
+        code: 'ML_SERVICE_UNAVAILABLE'
+      });
+    }
+
+    res.status(500).json({ 
+      message: 'Failed to reset personalization',
+      error: err.message 
+    });
   }
 };

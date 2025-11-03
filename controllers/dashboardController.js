@@ -1,9 +1,7 @@
 import SpotifyWebApi from 'spotify-web-api-node';
 import User from '../models/userModel.js';
 import SharedPlaylist from '../models/sharedPlaylistModel.js';
-import axios from 'axios';
-
-const ML_API_URL = process.env.ML_API_URL || 'http://localhost:8000';
+import * as mlService from '../services/mlService.js';
 
 /**
  * @desc    Get comprehensive dashboard overview data
@@ -348,7 +346,7 @@ export const getListeningStats = async (req, res) => {
 };
 
 /**
- * @desc    Get user's currently playing track with audio features
+ * @desc    Get user's currently playing track with real-time mood analysis
  * @route   GET /api/dashboard/now-playing
  * @access  Protected
  */
@@ -370,16 +368,23 @@ export const getNowPlaying = async (req, res) => {
 
     const track = currentlyPlaying.body.item;
     
-    // Get audio features for current track
-    const audioFeatures = await spotifyApi.getAudioFeaturesForTrack(track.id);
-    
-    // Calculate mood from audio features
-    const features = audioFeatures.body;
-    let mood = 'Neutral';
-    if (features.valence > 0.7 && features.energy > 0.6) mood = 'Happy';
-    else if (features.valence < 0.3 && features.energy < 0.4) mood = 'Sad';
-    else if (features.energy > 0.8) mood = 'Energetic';
-    else if (features.energy < 0.3 && features.valence > 0.5) mood = 'Calm';
+    // Try to get real-time mood analysis from ML service
+    let moodData = null;
+    try {
+      const realtimeAnalysis = await mlService.analyzeRealtime(
+        track.id,
+        user._id.toString(),
+        user.accessToken
+      );
+      moodData = {
+        mood: realtimeAnalysis.mood?.fused_mood || 'Unknown',
+        confidence: realtimeAnalysis.mood?.confidence || 0,
+        audioFeatures: realtimeAnalysis.mood?.scores || null
+      };
+    } catch (mlError) {
+      console.warn('⚠️ ML real-time analysis unavailable:', mlError.message);
+      // Continue without mood data
+    }
     
     res.json({
       isPlaying: currentlyPlaying.body.is_playing,
@@ -397,8 +402,7 @@ export const getNowPlaying = async (req, res) => {
         externalUrl: track.external_urls.spotify,
         previewUrl: track.preview_url,
       },
-      audioFeatures: features,
-      mood: mood,
+      mood: moodData,
       device: {
         name: currentlyPlaying.body.device?.name,
         type: currentlyPlaying.body.device?.type,
@@ -497,82 +501,6 @@ export const getDashboardRecommendations = async (req, res) => {
 
     res.status(500).json({ 
       message: 'Failed to fetch recommendations',
-      error: error.message 
-    });
-  }
-};
-
-/**
- * @desc    Get mood analysis trends (PLACEHOLDER - needs ML API)
- * @route   GET /api/dashboard/mood-trends
- * @access  Protected
- */
-export const getMoodTrends = async (req, res) => {
-  try {
-    const user = req.user;
-    const { limit = 50 } = req.query;
-
-    const spotifyApi = new SpotifyWebApi();
-    spotifyApi.setAccessToken(user.accessToken);
-
-    // Get recently played tracks
-    const recentlyPlayed = await spotifyApi.getMyRecentlyPlayedTracks({ 
-      limit: parseInt(limit) 
-    });
-
-    // Get audio features
-    const trackIds = recentlyPlayed.body.items.map(item => item.track.id);
-    const audioFeatures = await spotifyApi.getAudioFeaturesForTracks(trackIds);
-
-    // Basic mood calculation (will be replaced by ML API)
-    const moodData = recentlyPlayed.body.items.map((item, index) => {
-      const features = audioFeatures.body.audio_features[index];
-      
-      let mood = 'Neutral';
-      if (features) {
-        if (features.valence > 0.7 && features.energy > 0.6) mood = 'Happy';
-        else if (features.valence < 0.3 && features.energy < 0.4) mood = 'Sad';
-        else if (features.energy > 0.8) mood = 'Energetic';
-        else if (features.energy < 0.3 && features.valence > 0.5) mood = 'Calm';
-      }
-
-      return {
-        timestamp: item.played_at,
-        trackName: item.track.name,
-        artistName: item.track.artists[0].name,
-        mood,
-        features: features || {},
-      };
-    });
-
-    // Mood distribution
-    const moodCounts = moodData.reduce((acc, item) => {
-      acc[item.mood] = (acc[item.mood] || 0) + 1;
-      return acc;
-    }, {});
-
-    res.json({
-      timeline: moodData,
-      distribution: Object.entries(moodCounts).map(([mood, count]) => ({
-        mood,
-        count,
-        percentage: Math.round((count / moodData.length) * 100),
-      })),
-      message: 'Using basic mood analysis. ML API integration pending.',
-    });
-
-  } catch (error) {
-    console.error('❌ Mood trends error:', error.message);
-    
-    if (error.statusCode === 401) {
-      return res.status(401).json({ 
-        message: 'Spotify token expired',
-        code: 'SPOTIFY_TOKEN_EXPIRED'
-      });
-    }
-
-    res.status(500).json({ 
-      message: 'Failed to fetch mood trends',
       error: error.message 
     });
   }

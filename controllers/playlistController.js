@@ -1,9 +1,8 @@
 import SpotifyWebApi from 'spotify-web-api-node';
-import axios from 'axios';
+import * as mlService from '../services/mlService.js';
 import { getFromCache, setInCache } from '../services/cacheService.js';
 import { broadcastUpdate } from '../services/socketService.js';
-
-const ML_API_URL = process.env.ML_API_URL;
+import { CACHE_TTL } from '../utils/constants.js';
 
 const getSpotifyApi = (accessToken) => {
   const spotifyApi = new SpotifyWebApi();
@@ -120,35 +119,26 @@ export const getPlaylistMood = async (req, res) => {
     console.log(`📊 Sending ${trackIds.length} tracks to ML API for mood analysis...`);
 
     // Call ML API to get mood predictions
-    const moodResponse = await axios.post(
-      `${ML_API_URL}/predict/playlist`,
-      {
-        track_ids: trackIds,
-        audio_features: features,
-        access_token: user.accessToken,
-        user_id: user._id.toString(),
-      },
-      {
-        timeout: 60000, // 60 second timeout for large playlists
-        headers: {
-          'Content-Type': 'application/json',
-        }
-      }
-    );
+    const moodResponse = await mlService.analyzePlaylistMood({
+      track_ids: trackIds,
+      audio_features: features,
+      access_token: user.accessToken,
+      user_id: user._id.toString(),
+    });
 
     console.log('✅ ML API mood prediction successful');
 
     const result = {
       playlistId,
-      tracks: moodResponse.data.tracks,
-      moodDistribution: moodResponse.data.moodDistribution || {},
-      overallMood: moodResponse.data.overallMood || 'Mixed',
+      tracks: moodResponse.tracks,
+      moodDistribution: moodResponse.moodDistribution || {},
+      overallMood: moodResponse.overallMood || 'Mixed',
       totalTracks: tracks.length,
       analyzedAt: new Date().toISOString(),
     };
 
-    // Cache the result for 1 hour
-    await setInCache(cacheKey, result, 3600);
+    // Cache the result
+    await setInCache(cacheKey, result, CACHE_TTL.MOOD_ANALYSIS);
 
     // Send real-time update
     broadcastUpdate({
@@ -209,29 +199,20 @@ export const optimizePlaylistFlow = async (req, res) => {
     console.log(`🔄 Optimizing playlist flow with ${tracks.length} tracks using ${algorithm || 'dynamic_programming'}`);
     
     // Call ML API's Flow Optimizer
-    const flowResponse = await axios.post(
-      `${ML_API_URL}/optimize/flow`,
-      {
-        tracks,
-        start_mood: startMood || null,
-        end_mood: endMood || null,
-        algorithm: algorithm || 'dynamic_programming',
-        user_id: req.user._id.toString(),
-      },
-      {
-        timeout: 45000, // 45 second timeout
-        headers: {
-          'Content-Type': 'application/json',
-        }
-      }
+    const flowResponse = await mlService.optimizePlaylistFlow(
+      tracks,
+      startMood,
+      endMood,
+      algorithm || 'dynamic_programming',
+      req.user._id.toString()
     );
 
     console.log('✅ Flow optimization successful');
 
     res.json({
-      optimizedOrder: flowResponse.data.optimizedOrder,
-      flowScore: flowResponse.data.flowScore,
-      transitions: flowResponse.data.transitions,
+      optimizedOrder: flowResponse.optimizedOrder,
+      flowScore: flowResponse.flowScore,
+      transitions: flowResponse.transitions,
       algorithm: algorithm || 'dynamic_programming',
     });
 
@@ -256,6 +237,161 @@ export const optimizePlaylistFlow = async (req, res) => {
 };
 
 /**
+ * @desc    Detect mood gaps in playlist
+ * @route   POST /api/playlists/gaps
+ * @access  Protected
+ */
+export const detectMoodGaps = async (req, res) => {
+  const { tracks, threshold = 1.5 } = req.body;
+
+  if (!tracks || !Array.isArray(tracks) || tracks.length === 0) {
+    return res.status(400).json({ message: 'Tracks array is required' });
+  }
+
+  try {
+    console.log(`🔍 Detecting mood gaps in ${tracks.length} tracks`);
+    
+    const gapsResponse = await mlService.detectMoodGaps(tracks, threshold);
+
+    console.log(`✅ Found ${gapsResponse.gaps.length} mood gaps`);
+
+    res.json(gapsResponse);
+
+  } catch (err) {
+    console.error('❌ Error detecting mood gaps:', err.message);
+    
+    if (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
+      return res.status(503).json({ 
+        message: 'ML service is currently unavailable',
+        code: 'ML_SERVICE_UNAVAILABLE'
+      });
+    }
+    
+    res.status(500).json({ message: 'Failed to detect mood gaps' });
+  }
+};
+
+/**
+ * @desc    Fill mood gaps with recommendations
+ * @route   POST /api/playlists/fill-gaps
+ * @access  Protected
+ */
+export const fillMoodGaps = async (req, res) => {
+  const { tracks } = req.body;
+
+  if (!tracks || !Array.isArray(tracks) || tracks.length === 0) {
+    return res.status(400).json({ message: 'Tracks array is required' });
+  }
+
+  try {
+    console.log(`🎵 Filling mood gaps for ${tracks.length} tracks`);
+    
+    const fillResponse = await mlService.fillMoodGaps(
+      tracks,
+      req.user.accessToken,
+      req.user._id.toString()
+    );
+
+    console.log(`✅ Generated recommendations for ${fillResponse.total_gaps} gaps`);
+
+    res.json(fillResponse);
+
+  } catch (err) {
+    console.error('❌ Error filling mood gaps:', err.message);
+    
+    if (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
+      return res.status(503).json({ 
+        message: 'ML service is currently unavailable',
+        code: 'ML_SERVICE_UNAVAILABLE'
+      });
+    }
+    
+    res.status(500).json({ message: 'Failed to fill mood gaps' });
+  }
+};
+
+/**
+ * @desc    Generate mood-based playlist
+ * @route   POST /api/playlists/generate/mood
+ * @access  Protected
+ */
+export const generateMoodPlaylist = async (req, res) => {
+  const { targetMood, limit = 20, seedTracks = [] } = req.body;
+
+  if (!targetMood) {
+    return res.status(400).json({ message: 'Target mood is required' });
+  }
+
+  try {
+    console.log(`🎨 Generating ${targetMood} playlist`);
+    
+    const playlistResponse = await mlService.generateMoodPlaylist(
+      targetMood,
+      req.user._id.toString(),
+      req.user.accessToken,
+      limit,
+      seedTracks
+    );
+
+    console.log(`✅ Generated ${playlistResponse.total} tracks`);
+
+    res.json(playlistResponse);
+
+  } catch (err) {
+    console.error('❌ Error generating mood playlist:', err.message);
+    
+    if (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
+      return res.status(503).json({ 
+        message: 'ML service is currently unavailable',
+        code: 'ML_SERVICE_UNAVAILABLE'
+      });
+    }
+    
+    res.status(500).json({ message: 'Failed to generate mood playlist' });
+  }
+};
+
+/**
+ * @desc    Generate activity-based playlist
+ * @route   POST /api/playlists/generate/activity
+ * @access  Protected
+ */
+export const generateActivityPlaylist = async (req, res) => {
+  const { activity, limit = 20 } = req.body;
+
+  if (!activity) {
+    return res.status(400).json({ message: 'Activity is required' });
+  }
+
+  try {
+    console.log(`🏃 Generating ${activity} playlist`);
+    
+    const playlistResponse = await mlService.generateActivityPlaylist(
+      activity,
+      req.user._id.toString(),
+      req.user.accessToken,
+      limit
+    );
+
+    console.log(`✅ Generated ${playlistResponse.total} tracks`);
+
+    res.json(playlistResponse);
+
+  } catch (err) {
+    console.error('❌ Error generating activity playlist:', err.message);
+    
+    if (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
+      return res.status(503).json({ 
+        message: 'ML service is currently unavailable',
+        code: 'ML_SERVICE_UNAVAILABLE'
+      });
+    }
+    
+    res.status(500).json({ message: 'Failed to generate activity playlist' });
+  }
+};
+
+/**
  * @desc    Get personalized recommendations using hybrid model
  * @route   POST /api/playlists/recommendations
  * @access  Protected
@@ -268,33 +404,19 @@ export const getRecommendations = async (req, res) => {
     console.log('🎯 Fetching hybrid ML recommendations');
     
     // Try hybrid ML model first
-    const hybridResponse = await axios.post(
-      `${ML_API_URL}/model/recommend`,
-      {
-        seed_tracks: seed_tracks || [],
-        seed_genres: seed_genres || [],
-        target_valence: target_valence,
-        target_energy: target_energy,
-        user_id: user._id.toString(),
-        access_token: user.accessToken,
-        limit: limit || 20,
-      },
-      {
-        timeout: 30000,
-        headers: {
-          'Content-Type': 'application/json',
-        }
-      }
+    const hybridResponse = await mlService.getHybridRecommendations(
+      seed_tracks || [],
+      seed_genres || [],
+      target_valence,
+      target_energy,
+      user._id.toString(),
+      user.accessToken,
+      limit || 20
     );
 
     console.log('✅ ML recommendations retrieved successfully');
 
-    res.json({
-      tracks: hybridResponse.data.tracks,
-      source: 'ml_hybrid',
-      personalized: hybridResponse.data.personalized || false,
-      user_preferences: hybridResponse.data.user_preferences || {},
-    });
+    res.json(hybridResponse);
 
   } catch (mlError) {
     console.warn(`⚠️ ML recommendations failed: ${mlError.message}. Falling back to Spotify.`);

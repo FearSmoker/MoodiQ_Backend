@@ -12,15 +12,11 @@ import transferRoutes from './routes/transferRoutes.js';
 import userRoutes from './routes/userRoutes.js';
 import dashboardRoutes from './routes/dashboardRoutes.js';
 import analyticsRoutes from './routes/analyticsRoutes.js';
-import flowOptimizerRoutes from './routes/flowOptimizerRoutes.js';
-import moodGeneratorRoutes from './routes/moodGeneratorRoutes.js';
-import lyricsFusionRoutes from './routes/lyricsFusionRoutes.js';
-import realtimeRoutes from './routes/realtimeRoutes.js';
-import recommendationsRoutes from './routes/recommendationsRoutes.js';
 
 // Load services
 import { initSocketService } from './services/socketService.js';
 import { connectRedis } from './services/cacheService.js';
+import * as mlService from './services/mlService.js';
 
 // Config
 dotenv.config();
@@ -64,12 +60,19 @@ app.use((req, res, next) => {
   next();
 });
 
-// Health check route
-app.get('/health', (req, res) => {
+// Health check route with ML service status
+app.get('/health', async (req, res) => {
+  const mlHealth = await mlService.checkHealth();
+  
   res.status(200).json({ 
     status: 'ok', 
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
+    services: {
+      backend: 'healthy',
+      database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+      ml: mlHealth.available ? 'available' : 'unavailable',
+    }
   });
 });
 
@@ -84,12 +87,6 @@ app.use('/api/playlists', playlistRoutes);
 app.use('/api/transfer', transferRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/dashboard', dashboardRoutes);
-app.use('/api/analytics', analyticsRoutes);
-app.use('/api/flow', flowOptimizerRoutes);
-app.use('/api/mood-generator', moodGeneratorRoutes);
-app.use('/api/lyrics', lyricsFusionRoutes);
-app.use('/api/realtime', realtimeRoutes);
-app.use('/api/recommendations', recommendationsRoutes);
 
 // Root route
 app.get('/', (req, res) => {
@@ -104,13 +101,23 @@ app.get('/', (req, res) => {
       transfer: '/api/transfer',
       user: '/api/user',
       dashboard: '/api/dashboard',
-      analytics: '/api/analytics',
-      flowOptimizer: '/api/flow',
-      moodGenerator: '/api/mood-generator',
-      lyricsFusion: '/api/lyrics',
-      realtime: '/api/realtime',
-      recommendations: '/api/recommendations',
     },
+    mlIntegration: {
+      enabled: true,
+      url: process.env.ML_API_URL || 'https://moodiq-model.onrender.com',
+      features: [
+        'Mood Analysis',
+        'Playlist Optimization',
+        'Gap Detection',
+        'Mood-based Generation',
+        'Activity-based Generation',
+        'Personalized Recommendations',
+        'User Feedback Learning',
+        'Real-time Analysis',
+        'NLP Commands',
+        'Mood Timeline'
+      ]
+    }
   });
 });
 
@@ -143,7 +150,7 @@ console.log('✅ WebSocket server initialized on /ws');
 
 // Connect to MongoDB
 mongoose.connect(process.env.MONGO_URI)
-  .then(() => {
+  .then(async () => {
     console.log('✅ Connected to MongoDB');
     console.log('📊 Database:', mongoose.connection.name);
     
@@ -159,28 +166,44 @@ mongoose.connect(process.env.MONGO_URI)
       console.log('ℹ️ Redis caching disabled');
     }
     
+    // Check ML service availability
+    console.log('🤖 Checking ML service...');
+    const mlHealth = await mlService.checkHealth();
+    if (mlHealth.available) {
+      console.log('✅ ML service is available');
+      console.log('   URL:', process.env.ML_API_URL || 'https://moodiq-model.onrender.com');
+    } else {
+      console.warn('⚠️ ML service is currently unavailable');
+      console.warn('   Some features may be limited');
+    }
+    
     // Start server
     server.listen(PORT, () => {
       console.log('\n' + '='.repeat(60));
       console.log('🚀 MoodiQ-AI Backend Server Started');
       console.log('='.repeat(60));
-      console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
+      console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
       console.log(`🔗 Server: http://localhost:${PORT}`);
       console.log(`📡 WebSocket: ws://localhost:${PORT}/ws`);
       console.log(`🎯 Frontend: ${process.env.FRONTEND_URL || 'Not set'}`);
+      console.log(`🤖 ML Service: ${process.env.ML_API_URL || 'https://moodiq-model.onrender.com'}`);
       console.log('='.repeat(60));
       console.log('\n📋 Available API Endpoints:');
       console.log('   /api/auth              - Authentication & OAuth');
-      console.log('   /api/playlists         - Playlist management');
+      console.log('   /api/playlists         - Playlist management + ML features');
       console.log('   /api/transfer          - Cross-platform transfer');
-      console.log('   /api/user              - User preferences & sharing');
+      console.log('   /api/user              - User preferences, feedback & learning');
       console.log('   /api/dashboard         - Dashboard data & stats');
-      console.log('   /api/analytics         - Real-time analytics');
-      console.log('   /api/flow              - Flow optimization');
-      console.log('   /api/mood-generator    - Mood-based playlist generation');
-      console.log('   /api/lyrics            - Lyrics fusion & analysis');
-      console.log('   /api/realtime          - Real-time playback tracking');
-      console.log('   /api/recommendations   - Smart recommendations');
+      console.log('\n🎯 ML-Powered Features:');
+      console.log('   • Mood Analysis & Prediction');
+      console.log('   • Playlist Flow Optimization');
+      console.log('   • Mood Gap Detection & Filling');
+      console.log('   • Mood/Activity-based Generation');
+      console.log('   • Personalized Recommendations');
+      console.log('   • User Feedback Learning');
+      console.log('   • Real-time Playback Analysis');
+      console.log('   • NLP Voice Commands');
+      console.log('   • Mood Timeline Analytics');
       console.log('='.repeat(60) + '\n');
     });
   })

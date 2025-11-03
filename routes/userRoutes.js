@@ -7,31 +7,71 @@ import {
   getUserShares,
   deleteShare,
   submitFeedback,
+  submitBatchFeedback,
+  logUserBehavior,
   handleVoiceCommand,
   getUserStats,
+  getUserMoodTimeline,
+  getUserPersonalizedModel,
   triggerModelRetrain,
+  resetUserPersonalization,
 } from '../controllers/userController.js';
 import { protect } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
-// Preferences
+// ===============================================
+// User Preferences
+// ===============================================
+
 router.get('/preferences', protect, getPreferences);
 router.put('/preferences', protect, updatePreferences);
 
-// User statistics
+// ===============================================
+// User Statistics
+// ===============================================
+
 router.get('/stats', protect, getUserStats);
 
-// Feedback for ML model
+// ===============================================
+// ML Feedback & Learning
+// ===============================================
+
+// Submit single feedback
 router.post('/feedback', protect, submitFeedback);
 
-// Model retraining
+// Submit batch feedback
+router.post('/feedback/batch', protect, submitBatchFeedback);
+
+// Log user behavior (implicit learning)
+router.post('/behavior', protect, logUserBehavior);
+
+// ===============================================
+// Personalization & Model Training
+// ===============================================
+
+// Get user's mood timeline
+router.get('/mood-timeline', protect, getUserMoodTimeline);
+
+// Get personalized model info
+router.get('/personalized-model', protect, getUserPersonalizedModel);
+
+// Trigger model retraining
 router.post('/retrain-model', protect, triggerModelRetrain);
 
-// Voice/Chat interface
+// Reset personalization
+router.delete('/reset-personalization', protect, resetUserPersonalization);
+
+// ===============================================
+// Voice/NLP Commands
+// ===============================================
+
 router.post('/voice-command', protect, handleVoiceCommand);
 
-// Playlist sharing
+// ===============================================
+// Playlist Sharing
+// ===============================================
+
 router.post('/share', protect, sharePlaylist);
 router.get('/shares', protect, getUserShares);
 router.get('/share/:shareId', getSharedPlaylist); // Public route

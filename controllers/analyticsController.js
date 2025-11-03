@@ -1,5 +1,5 @@
 import SpotifyWebApi from 'spotify-web-api-node';
-import User from '../models/userModel.js';
+import * as mlService from '../services/mlService.js';
 
 /**
  * @desc    Get real-time mood analysis from recent listening
@@ -21,67 +21,75 @@ export const getMoodTrends = async (req, res) => {
     const trackIds = recentlyPlayed.body.items.map(item => item.track.id);
     const audioFeatures = await spotifyApi.getAudioFeaturesForTracks(trackIds);
 
-    // Combine data
-    const tracksWithFeatures = recentlyPlayed.body.items.map((item, index) => ({
-      trackName: item.track.name,
-      artistName: item.track.artists[0].name,
-      playedAt: item.played_at,
-      features: audioFeatures.body.audio_features[index],
-    }));
+    // Send to ML API for mood analysis
+    console.log(`📊 Analyzing mood trends for ${trackIds.length} tracks`);
+    
+    try {
+      const moodAnalysis = await mlService.analyzePlaylistMood({
+        track_ids: trackIds,
+        audio_features: audioFeatures.body.audio_features,
+        access_token: user.accessToken,
+        user_id: user._id.toString()
+      });
 
-    // Calculate mood trends over time
-    const moodTrends = tracksWithFeatures.map(track => {
-      const features = track.features;
+      // Combine with playback data
+      const tracksWithMood = recentlyPlayed.body.items.map((item, index) => {
+        const trackMood = moodAnalysis.tracks.find(t => t.id === item.track.id);
+        return {
+          timestamp: item.played_at,
+          trackName: item.track.name,
+          artistName: item.track.artists[0].name,
+          mood: trackMood?.mood || 'Unknown',
+          moodScores: trackMood?.moodDetails?.scores || {},
+        };
+      });
+
+      res.json({
+        trends: tracksWithMood,
+        moodDistribution: moodAnalysis.moodDistribution,
+        overallMood: moodAnalysis.overallMood,
+        statistics: {
+          totalTracks: tracksWithMood.length,
+          analyzedAt: new Date().toISOString()
+        }
+      });
+
+    } catch (mlError) {
+      console.warn('⚠️ ML analysis unavailable, using basic analysis');
       
-      // Calculate mood score based on audio features
-      const happiness = features.valence;
-      const energy = features.energy;
-      const danceability = features.danceability;
-      
-      let mood = 'Neutral';
-      if (happiness > 0.7 && energy > 0.6) mood = 'Happy';
-      else if (happiness < 0.3 && energy < 0.4) mood = 'Sad';
-      else if (energy > 0.8) mood = 'Energetic';
-      else if (energy < 0.3 && happiness > 0.5) mood = 'Calm';
-      else if (happiness < 0.3 && energy > 0.6) mood = 'Angry';
+      // Fallback: Basic mood calculation
+      const basicMoodTrends = recentlyPlayed.body.items.map((item, index) => {
+        const features = audioFeatures.body.audio_features[index];
+        let mood = 'Neutral';
+        
+        if (features) {
+          const happiness = features.valence;
+          const energy = features.energy;
+          
+          if (happiness > 0.7 && energy > 0.6) mood = 'Happy';
+          else if (happiness < 0.3 && energy < 0.4) mood = 'Sad';
+          else if (energy > 0.8) mood = 'Energetic';
+          else if (energy < 0.3 && happiness > 0.5) mood = 'Calm';
+        }
 
-      return {
-        timestamp: track.playedAt,
-        trackName: track.trackName,
-        artistName: track.artistName,
-        mood,
-        moodScores: {
-          valence: happiness,
-          energy: energy,
-          danceability: danceability,
-        },
-      };
-    });
+        return {
+          timestamp: item.played_at,
+          trackName: item.track.name,
+          artistName: item.track.artists[0].name,
+          mood,
+          moodScores: {
+            valence: features?.valence || 0.5,
+            energy: features?.energy || 0.5,
+          },
+        };
+      });
 
-    // Calculate overall statistics
-    const avgValence = tracksWithFeatures.reduce((sum, t) => sum + t.features.valence, 0) / tracksWithFeatures.length;
-    const avgEnergy = tracksWithFeatures.reduce((sum, t) => sum + t.features.energy, 0) / tracksWithFeatures.length;
-    const avgDanceability = tracksWithFeatures.reduce((sum, t) => sum + t.features.danceability, 0) / tracksWithFeatures.length;
-
-    // Mood distribution
-    const moodCount = moodTrends.reduce((acc, item) => {
-      acc[item.mood] = (acc[item.mood] || 0) + 1;
-      return acc;
-    }, {});
-
-    res.json({
-      trends: moodTrends,
-      statistics: {
-        averageValence: avgValence,
-        averageEnergy: avgEnergy,
-        averageDanceability: avgDanceability,
-      },
-      moodDistribution: Object.entries(moodCount).map(([mood, count]) => ({
-        mood,
-        count,
-        percentage: Math.round((count / moodTrends.length) * 100),
-      })),
-    });
+      res.json({
+        trends: basicMoodTrends,
+        source: 'fallback',
+        message: 'Using basic mood analysis'
+      });
+    }
 
   } catch (error) {
     console.error('❌ Mood trends error:', error.message);
@@ -122,7 +130,7 @@ export const getActivityAnalytics = async (req, res) => {
     recentlyPlayed.body.items.forEach(item => {
       const date = new Date(item.played_at);
       const hour = date.getHours();
-      const day = date.getDay(); // 0 = Sunday, 6 = Saturday
+      const day = date.getDay();
       
       hourlyActivity[hour]++;
       dailyActivity[day]++;
@@ -251,6 +259,105 @@ export const getGenreAnalysis = async (req, res) => {
 
     res.status(500).json({ 
       message: 'Failed to fetch genre analysis',
+      error: error.message 
+    });
+  }
+};
+
+/**
+ * @desc    Get user's mood timeline (ML-powered)
+ * @route   GET /api/analytics/mood-timeline
+ * @access  Protected
+ */
+export const getMoodTimeline = async (req, res) => {
+  const { days = 7 } = req.query;
+
+  try {
+    console.log(`📈 Fetching mood timeline for ${days} days`);
+    
+    const timelineResponse = await mlService.getUserMoodTimeline(
+      req.user._id.toString(),
+      parseInt(days)
+    );
+
+    console.log(`✅ Retrieved timeline with ${timelineResponse.timeline.length} data points`);
+
+    res.json(timelineResponse);
+
+  } catch (err) {
+    console.error('❌ Error fetching mood timeline:', err.message);
+    
+    if (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
+      return res.status(503).json({ 
+        message: 'ML service is currently unavailable',
+        code: 'ML_SERVICE_UNAVAILABLE'
+      });
+    }
+
+    res.status(500).json({ 
+      message: 'Failed to fetch mood timeline',
+      error: err.message 
+    });
+  }
+};
+
+/**
+ * @desc    Get real-time current track analysis
+ * @route   GET /api/analytics/realtime
+ * @access  Protected
+ */
+export const getRealtimeAnalysis = async (req, res) => {
+  try {
+    const user = req.user;
+    const spotifyApi = new SpotifyWebApi();
+    spotifyApi.setAccessToken(user.accessToken);
+
+    const currentlyPlaying = await spotifyApi.getMyCurrentPlayingTrack();
+
+    if (!currentlyPlaying.body || !currentlyPlaying.body.item) {
+      return res.json({
+        isPlaying: false,
+        message: 'No track currently playing',
+      });
+    }
+
+    const track = currentlyPlaying.body.item;
+
+    console.log(`🎵 Analyzing real-time playback: ${track.name}`);
+
+    // Get real-time mood analysis from ML
+    const realtimeAnalysis = await mlService.analyzeRealtime(
+      track.id,
+      user._id.toString(),
+      user.accessToken
+    );
+
+    res.json({
+      isPlaying: currentlyPlaying.body.is_playing,
+      track: realtimeAnalysis.track,
+      mood: realtimeAnalysis.mood,
+      timestamp: realtimeAnalysis.timestamp
+    });
+
+  } catch (error) {
+    console.error('❌ Real-time analysis error:', error.message);
+    
+    if (error.statusCode === 401) {
+      return res.status(401).json({ 
+        message: 'Spotify token expired',
+        code: 'SPOTIFY_TOKEN_EXPIRED'
+      });
+    }
+
+    if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
+      return res.status(503).json({ 
+        message: 'ML service is currently unavailable',
+        code: 'ML_SERVICE_UNAVAILABLE'
+      });
+    }
+
+    res.status(500).json({ 
+      message: 'Failed to analyze real-time playback',
       error: error.message 
     });
   }
