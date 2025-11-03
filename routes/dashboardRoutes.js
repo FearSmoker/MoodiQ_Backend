@@ -4,7 +4,6 @@ import {
   getListeningStats,
   getNowPlaying,
   getDashboardRecommendations,
-  getMoodTrends,
 } from '../controllers/dashboardController.js';
 import { protect } from '../middleware/authMiddleware.js';
 
@@ -28,8 +27,5 @@ router.get('/now-playing', getNowPlaying);
 
 // Personalized recommendations
 router.get('/recommendations', getDashboardRecommendations);
-
-// Mood trends over time
-router.get('/mood-trends', getMoodTrends);
 
 export default router;
