@@ -10,8 +10,13 @@ import authRoutes from './routes/authRoutes.js';
 import playlistRoutes from './routes/playlistRoutes.js';
 import transferRoutes from './routes/transferRoutes.js';
 import userRoutes from './routes/userRoutes.js';
-import dashboardRoutes from './routes/dashboardRoutes.js'; // NEW
-import analyticsRoutes from './routes/analyticsRoutes.js'; // NEW
+import dashboardRoutes from './routes/dashboardRoutes.js';
+import analyticsRoutes from './routes/analyticsRoutes.js';
+import flowOptimizerRoutes from './routes/flowOptimizerRoutes.js';
+import moodGeneratorRoutes from './routes/moodGeneratorRoutes.js';
+import lyricsFusionRoutes from './routes/lyricsFusionRoutes.js';
+import realtimeRoutes from './routes/realtimeRoutes.js';
+import recommendationsRoutes from './routes/recommendationsRoutes.js';
 
 // Load services
 import { initSocketService } from './services/socketService.js';
@@ -78,14 +83,19 @@ app.use('/api/auth', authRoutes);
 app.use('/api/playlists', playlistRoutes);
 app.use('/api/transfer', transferRoutes);
 app.use('/api/user', userRoutes);
-app.use('/api/dashboard', dashboardRoutes); // NEW
-app.use('/api/analytics', analyticsRoutes); // NEW
+app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/analytics', analyticsRoutes);
+app.use('/api/flow', flowOptimizerRoutes);
+app.use('/api/mood-generator', moodGeneratorRoutes);
+app.use('/api/lyrics', lyricsFusionRoutes);
+app.use('/api/realtime', realtimeRoutes);
+app.use('/api/recommendations', recommendationsRoutes);
 
 // Root route
 app.get('/', (req, res) => {
   res.json({
     name: 'MoodiQ-AI Backend API',
-    version: '1.0.0',
+    version: '2.0.0',
     status: 'running',
     endpoints: {
       health: '/health',
@@ -95,6 +105,11 @@ app.get('/', (req, res) => {
       user: '/api/user',
       dashboard: '/api/dashboard',
       analytics: '/api/analytics',
+      flowOptimizer: '/api/flow',
+      moodGenerator: '/api/mood-generator',
+      lyricsFusion: '/api/lyrics',
+      realtime: '/api/realtime',
+      recommendations: '/api/recommendations',
     },
   });
 });
@@ -149,18 +164,23 @@ mongoose.connect(process.env.MONGO_URI)
       console.log('\n' + '='.repeat(60));
       console.log('🚀 MoodiQ-AI Backend Server Started');
       console.log('='.repeat(60));
-      console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+      console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
       console.log(`🔗 Server: http://localhost:${PORT}`);
       console.log(`📡 WebSocket: ws://localhost:${PORT}/ws`);
       console.log(`🎯 Frontend: ${process.env.FRONTEND_URL || 'Not set'}`);
       console.log('='.repeat(60));
       console.log('\n📋 Available API Endpoints:');
-      console.log('   /api/auth          - Authentication');
-      console.log('   /api/playlists     - Playlist management');
-      console.log('   /api/transfer      - Cross-platform transfer');
-      console.log('   /api/user          - User preferences & sharing');
-      console.log('   /api/dashboard     - Dashboard data & stats');
-      console.log('   /api/analytics     - Real-time analytics');
+      console.log('   /api/auth              - Authentication & OAuth');
+      console.log('   /api/playlists         - Playlist management');
+      console.log('   /api/transfer          - Cross-platform transfer');
+      console.log('   /api/user              - User preferences & sharing');
+      console.log('   /api/dashboard         - Dashboard data & stats');
+      console.log('   /api/analytics         - Real-time analytics');
+      console.log('   /api/flow              - Flow optimization');
+      console.log('   /api/mood-generator    - Mood-based playlist generation');
+      console.log('   /api/lyrics            - Lyrics fusion & analysis');
+      console.log('   /api/realtime          - Real-time playback tracking');
+      console.log('   /api/recommendations   - Smart recommendations');
       console.log('='.repeat(60) + '\n');
     });
   })
