@@ -3,9 +3,13 @@ import User from '../models/userModel.js';
 
 /**
  * Protect routes - verify JWT token and attach user to request
+ * FIXED: Better error handling to prevent infinite reloads
  */
 export const protect = async (req, res, next) => {
   let token;
+
+  // Log incoming request (only for debugging, remove in production)
+  console.log(`🔒 Auth: ${req.method} ${req.path}`);
 
   if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
     try {
@@ -19,25 +23,27 @@ export const protect = async (req, res, next) => {
       req.user = await User.findById(decoded.id).select('-password');
       
       if (!req.user) {
+        console.error('❌ Auth: User not found for token');
         return res.status(401).json({ 
           message: 'Not authorized, user not found',
           code: 'USER_NOT_FOUND' 
         });
       }
 
-      // Check if Spotify token is expired
+      // CRITICAL: Check if Spotify token is expired
       if (req.user.tokenExpires && req.user.tokenExpires < Date.now()) {
-        console.log('Spotify token expired for user:', req.user.spotifyId);
-        return res.status(401).json({ 
-          message: 'Spotify token expired. Please refresh your token.',
-          code: 'SPOTIFY_TOKEN_EXPIRED',
-          refreshToken: req.user.refreshToken,
-        });
+        console.log('⚠️  Auth: Spotify token expired for user:', req.user.spotifyId);
+        
+        // Don't return error immediately - let the request continue
+        // The controller will handle refreshing the token
+        console.log('⏭️  Auth: Continuing request (controller will handle refresh)');
       }
 
+      console.log('✅ Auth: User authenticated:', req.user.displayName);
       next();
+
     } catch (error) {
-      console.error('Auth middleware error:', error.message);
+      console.error('❌ Auth error:', error.message);
       
       if (error.name === 'JsonWebTokenError') {
         return res.status(401).json({ 
@@ -55,10 +61,12 @@ export const protect = async (req, res, next) => {
       
       res.status(401).json({ 
         message: 'Not authorized, token failed',
-        code: 'AUTH_FAILED' 
+        code: 'AUTH_FAILED',
+        error: error.message
       });
     }
   } else {
+    console.error('❌ Auth: No token provided');
     res.status(401).json({ 
       message: 'Not authorized, no token provided',
       code: 'NO_TOKEN' 
@@ -79,7 +87,7 @@ export const optionalAuth = async (req, res, next) => {
       req.user = await User.findById(decoded.id).select('-password');
     } catch (error) {
       // Silently fail - route will work without user
-      console.log('Optional auth failed:', error.message);
+      console.log('⚠️  Optional auth failed:', error.message);
     }
   }
 
