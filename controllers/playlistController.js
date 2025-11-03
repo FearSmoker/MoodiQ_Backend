@@ -3,7 +3,7 @@ import axios from 'axios';
 import { getFromCache, setInCache } from '../services/cacheService.js';
 import { broadcastUpdate } from '../services/socketService.js';
 
-const ML_API_URL = process.env.ML_API_URL || 'http://localhost:8000';
+const ML_API_URL = process.env.ML_API_URL;
 
 const getSpotifyApi = (accessToken) => {
   const spotifyApi = new SpotifyWebApi();
@@ -27,6 +27,14 @@ export const getPlaylists = async (req, res) => {
     });
   } catch (err) {
     console.error('Error fetching playlists:', err.message);
+    
+    if (err.statusCode === 401) {
+      return res.status(401).json({ 
+        message: 'Spotify token expired',
+        code: 'SPOTIFY_TOKEN_EXPIRED'
+      });
+    }
+    
     res.status(500).json({ message: 'Failed to fetch playlists' });
   }
 };
@@ -46,6 +54,14 @@ export const getPlaylist = async (req, res) => {
     res.json(playlist.body);
   } catch (err) {
     console.error('Error fetching playlist:', err.message);
+    
+    if (err.statusCode === 401) {
+      return res.status(401).json({ 
+        message: 'Spotify token expired',
+        code: 'SPOTIFY_TOKEN_EXPIRED'
+      });
+    }
+    
     res.status(500).json({ message: 'Failed to fetch playlist details' });
   }
 };
@@ -68,10 +84,12 @@ export const getPlaylistMood = async (req, res) => {
     // Check cache first
     const cachedData = await getFromCache(cacheKey);
     if (cachedData) {
-      console.log('Returning cached mood data');
+      console.log('✅ Returning cached mood data');
       return res.json(cachedData);
     }
 
+    console.log('🔍 Fetching fresh mood data from Spotify and ML API');
+    
     // Get tracks from Spotify
     const spotifyApi = getSpotifyApi(user.accessToken);
     const tracksData = await spotifyApi.getPlaylistTracks(playlistId, {
@@ -99,51 +117,79 @@ export const getPlaylistMood = async (req, res) => {
     const featuresData = await spotifyApi.getAudioFeaturesForTracks(trackIds);
     const features = featuresData.body.audio_features;
 
+    console.log(`📊 Sending ${trackIds.length} tracks to ML API for mood analysis...`);
+
     // Call ML API to get mood predictions
-    const moodResponse = await axios.post(`${ML_API_URL}/predict/playlist`, {
-      track_ids: trackIds,
-      audio_features: features,
-      access_token: user.accessToken,
-      user_id: user._id.toString(),
-    }, {
-      timeout: 30000 // 30 second timeout
-    });
+    const moodResponse = await axios.post(
+      `${ML_API_URL}/predict/playlist`,
+      {
+        track_ids: trackIds,
+        audio_features: features,
+        access_token: user.accessToken,
+        user_id: user._id.toString(),
+      },
+      {
+        timeout: 60000, // 60 second timeout for large playlists
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      }
+    );
+
+    console.log('✅ ML API mood prediction successful');
 
     const result = {
       playlistId,
-      tracks: tracks.map((track, idx) => ({
-        ...track,
-        features: features[idx],
-        mood: moodResponse.data.tracks[idx]?.mood || 'Unknown',
-        moodScore: moodResponse.data.tracks[idx]?.score || 0,
-      })),
+      tracks: moodResponse.data.tracks,
       moodDistribution: moodResponse.data.moodDistribution || {},
       overallMood: moodResponse.data.overallMood || 'Mixed',
+      totalTracks: tracks.length,
+      analyzedAt: new Date().toISOString(),
     };
 
-    // Cache the result
-    await setInCache(cacheKey, result, 3600); // Cache for 1 hour
+    // Cache the result for 1 hour
+    await setInCache(cacheKey, result, 3600);
 
     // Send real-time update
     broadcastUpdate({
       type: 'playlist_analyzed',
       userId: user._id.toString(),
       playlistId: playlistId,
-      moods: result.tracks.map(t => t.mood),
+      overallMood: result.overallMood,
+      trackCount: tracks.length,
     });
 
     res.json(result);
 
   } catch (err) {
-    console.error('Error analyzing playlist mood:', err.message);
+    console.error('❌ Error analyzing playlist mood:', err.message);
     
-    if (err.response) {
-      return res.status(err.response.status).json({ 
-        message: 'ML API error: ' + (err.response.data?.message || err.message) 
+    if (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
+      return res.status(503).json({ 
+        message: 'ML service is currently unavailable. Please try again later.',
+        code: 'ML_SERVICE_UNAVAILABLE'
       });
     }
     
-    res.status(500).json({ message: 'Failed to analyze playlist mood' });
+    if (err.response) {
+      console.error('ML API Error Response:', err.response.data);
+      return res.status(err.response.status).json({ 
+        message: 'ML API error: ' + (err.response.data?.detail || err.message),
+        code: 'ML_API_ERROR'
+      });
+    }
+    
+    if (err.statusCode === 401) {
+      return res.status(401).json({ 
+        message: 'Spotify token expired',
+        code: 'SPOTIFY_TOKEN_EXPIRED'
+      });
+    }
+    
+    res.status(500).json({ 
+      message: 'Failed to analyze playlist mood',
+      error: err.message 
+    });
   }
 };
 
@@ -160,29 +206,48 @@ export const optimizePlaylistFlow = async (req, res) => {
   }
 
   try {
+    console.log(`🔄 Optimizing playlist flow with ${tracks.length} tracks using ${algorithm || 'dynamic_programming'}`);
+    
     // Call ML API's Flow Optimizer
-    const flowResponse = await axios.post(`${ML_API_URL}/optimize/flow`, {
-      tracks,
-      start_mood: startMood || null,
-      end_mood: endMood || null,
-      algorithm: algorithm || 'dynamic_programming',
-      user_id: req.user._id.toString(),
-    }, {
-      timeout: 30000
-    });
+    const flowResponse = await axios.post(
+      `${ML_API_URL}/optimize/flow`,
+      {
+        tracks,
+        start_mood: startMood || null,
+        end_mood: endMood || null,
+        algorithm: algorithm || 'dynamic_programming',
+        user_id: req.user._id.toString(),
+      },
+      {
+        timeout: 45000, // 45 second timeout
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      }
+    );
+
+    console.log('✅ Flow optimization successful');
 
     res.json({
       optimizedOrder: flowResponse.data.optimizedOrder,
       flowScore: flowResponse.data.flowScore,
       transitions: flowResponse.data.transitions,
+      algorithm: algorithm || 'dynamic_programming',
     });
 
   } catch (err) {
-    console.error('Error optimizing playlist flow:', err.message);
+    console.error('❌ Error optimizing playlist flow:', err.message);
+    
+    if (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
+      return res.status(503).json({ 
+        message: 'ML service is currently unavailable',
+        code: 'ML_SERVICE_UNAVAILABLE'
+      });
+    }
     
     if (err.response) {
       return res.status(err.response.status).json({ 
-        message: 'ML API error: ' + (err.response.data?.message || err.message) 
+        message: 'ML API error: ' + (err.response.data?.detail || err.message) 
       });
     }
     
@@ -200,33 +265,52 @@ export const getRecommendations = async (req, res) => {
   const user = req.user;
 
   try {
-    // Try hybrid ML model first (content-based + collaborative filtering)
-    const hybridResponse = await axios.post(`${ML_API_URL}/recommend`, {
-      seed_tracks: seed_tracks || [],
-      seed_genres: seed_genres || [],
-      target_valence: target_valence,
-      target_energy: target_energy,
-      user_id: user._id.toString(),
-      limit: limit || 20,
-    }, {
-      timeout: 20000
-    });
+    console.log('🎯 Fetching hybrid ML recommendations');
+    
+    // Try hybrid ML model first
+    const hybridResponse = await axios.post(
+      `${ML_API_URL}/model/recommend`,
+      {
+        seed_tracks: seed_tracks || [],
+        seed_genres: seed_genres || [],
+        target_valence: target_valence,
+        target_energy: target_energy,
+        user_id: user._id.toString(),
+        access_token: user.accessToken,
+        limit: limit || 20,
+      },
+      {
+        timeout: 30000,
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      }
+    );
+
+    console.log('✅ ML recommendations retrieved successfully');
 
     res.json({
       tracks: hybridResponse.data.tracks,
       source: 'ml_hybrid',
+      personalized: hybridResponse.data.personalized || false,
+      user_preferences: hybridResponse.data.user_preferences || {},
     });
 
   } catch (mlError) {
-    // Fallback to Spotify's recommendation API
-    console.warn(`ML recommendations failed: ${mlError.message}. Falling back to Spotify.`);
+    console.warn(`⚠️ ML recommendations failed: ${mlError.message}. Falling back to Spotify.`);
 
     try {
+      // Fallback to Spotify's recommendation API
       const spotifyApi = getSpotifyApi(user.accessToken);
 
-      // Spotify's seed limits (max 5 total seeds)
       const seedTracks = seed_tracks?.slice(0, 3) || [];
       const seedGenres = seed_genres?.slice(0, 2) || [];
+
+      // If no seeds, get user's top tracks
+      if (seedTracks.length === 0 && seedGenres.length === 0) {
+        const topTracks = await spotifyApi.getMyTopTracks({ limit: 5, time_range: 'short_term' });
+        seedTracks.push(...topTracks.body.items.slice(0, 3).map(t => t.id));
+      }
 
       const recommendations = await spotifyApi.getRecommendations({
         seed_tracks: seedTracks,
@@ -236,13 +320,16 @@ export const getRecommendations = async (req, res) => {
         limit: limit || 20,
       });
 
+      console.log('✅ Spotify fallback recommendations retrieved');
+
       res.json({
         tracks: recommendations.body.tracks,
-        source: 'spotify',
+        source: 'spotify_fallback',
+        message: 'Using Spotify recommendations (ML service unavailable)',
       });
 
     } catch (spotifyError) {
-      console.error(`Spotify fallback failed: ${spotifyError.message}`);
+      console.error(`❌ Spotify fallback failed: ${spotifyError.message}`);
       res.status(500).json({ message: 'Failed to get recommendations from all sources' });
     }
   }
@@ -279,6 +366,14 @@ export const getAudioFeatures = async (req, res) => {
 
   } catch (err) {
     console.error('Error fetching audio features:', err.message);
+    
+    if (err.statusCode === 401) {
+      return res.status(401).json({ 
+        message: 'Spotify token expired',
+        code: 'SPOTIFY_TOKEN_EXPIRED'
+      });
+    }
+    
     res.status(500).json({ message: 'Failed to fetch audio features' });
   }
 };
@@ -300,13 +395,12 @@ export const createPlaylist = async (req, res) => {
     
     // Create playlist
     const playlist = await spotifyApi.createPlaylist(name, {
-      description: description || '',
-      public: isPublic !== false, // Default to public
+      description: description || 'Created by MoodiQ-AI',
+      public: isPublic !== false,
     });
 
     // Add tracks if provided
     if (trackUris && Array.isArray(trackUris) && trackUris.length > 0) {
-      // Spotify limits to 100 tracks per request
       const batches = [];
       for (let i = 0; i < trackUris.length; i += 100) {
         batches.push(trackUris.slice(i, i + 100));
@@ -317,6 +411,8 @@ export const createPlaylist = async (req, res) => {
       }
     }
 
+    console.log(`✅ Created playlist: ${name} with ${trackUris?.length || 0} tracks`);
+
     res.json({
       id: playlist.body.id,
       name: playlist.body.name,
@@ -326,6 +422,14 @@ export const createPlaylist = async (req, res) => {
 
   } catch (err) {
     console.error('Error creating playlist:', err.message);
+    
+    if (err.statusCode === 401) {
+      return res.status(401).json({ 
+        message: 'Spotify token expired',
+        code: 'SPOTIFY_TOKEN_EXPIRED'
+      });
+    }
+    
     res.status(500).json({ message: 'Failed to create playlist' });
   }
 };
@@ -349,6 +453,8 @@ export const reorderPlaylist = async (req, res) => {
     // Replace all tracks with new order
     await spotifyApi.replaceTracksInPlaylist(id, trackUris);
 
+    console.log(`✅ Reordered playlist ${id} with ${trackUris.length} tracks`);
+
     res.json({ 
       success: true, 
       message: 'Playlist reordered successfully',
@@ -357,6 +463,14 @@ export const reorderPlaylist = async (req, res) => {
 
   } catch (err) {
     console.error('Error reordering playlist:', err.message);
+    
+    if (err.statusCode === 401) {
+      return res.status(401).json({ 
+        message: 'Spotify token expired',
+        code: 'SPOTIFY_TOKEN_EXPIRED'
+      });
+    }
+    
     res.status(500).json({ message: 'Failed to reorder playlist' });
   }
 };

@@ -9,6 +9,7 @@ import {
   submitFeedback,
   handleVoiceCommand,
   getUserStats,
+  triggerModelRetrain,
 } from '../controllers/userController.js';
 import { protect } from '../middleware/authMiddleware.js';
 
@@ -23,6 +24,9 @@ router.get('/stats', protect, getUserStats);
 
 // Feedback for ML model
 router.post('/feedback', protect, submitFeedback);
+
+// Model retraining
+router.post('/retrain-model', protect, triggerModelRetrain);
 
 // Voice/Chat interface
 router.post('/voice-command', protect, handleVoiceCommand);

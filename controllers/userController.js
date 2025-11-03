@@ -2,7 +2,7 @@ import User from '../models/userModel.js';
 import SharedPlaylist from '../models/sharedPlaylistModel.js';
 import axios from 'axios';
 
-const ML_API_URL = process.env.ML_API_URL || 'http://localhost:8000';
+const ML_API_URL = process.env.ML_API_URL;
 
 /**
  * @desc    Get user preferences
@@ -42,6 +42,8 @@ export const updatePreferences = async (req, res) => {
     
     await user.save();
     
+    console.log(`✅ Updated preferences for user: ${user.displayName}`);
+    
     res.json({
       preferences: user.preferences,
       message: 'Preferences updated successfully',
@@ -65,34 +67,58 @@ export const submitFeedback = async (req, res) => {
   }
 
   try {
+    console.log(`📝 Submitting feedback for track ${trackId}: ${correctMood}`);
+    
     // Send feedback to ML API for incremental learning
-    await axios.post(`${ML_API_URL}/model/feedback`, {
-      user_id: req.user._id.toString(),
-      track_id: trackId,
-      feedback_mood: correctMood,
-      playlist_id: playlistId,
-      timestamp: new Date().toISOString(),
-    }, {
-      timeout: 10000
-    });
+    const feedbackResponse = await axios.post(
+      `${ML_API_URL}/model/feedback`,
+      {
+        user_id: req.user._id.toString(),
+        track_id: trackId,
+        feedback_mood: correctMood,
+        playlist_id: playlistId,
+        timestamp: new Date().toISOString(),
+      },
+      {
+        timeout: 15000,
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      }
+    );
+
+    console.log('✅ Feedback submitted successfully to ML service');
 
     res.status(200).json({ 
       message: 'Feedback submitted successfully',
       trackId,
       mood: correctMood,
+      feedbackCount: feedbackResponse.data.user_feedback_count || 0,
+      readyForPersonalization: feedbackResponse.data.ready_for_personalization || false,
+      suggestRetrain: feedbackResponse.data.suggest_retrain || false,
     });
   } catch (err) {
-    console.error('Error submitting feedback:', err.message);
+    console.error('❌ Error submitting feedback:', err.message);
     
-    // Don't fail the request if ML API is down
+    // Don't fail the request if ML API is down - just acknowledge receipt
     if (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
+      console.warn('⚠️ ML service unavailable, feedback logged locally only');
       return res.status(200).json({ 
-        message: 'Feedback received (ML service unavailable)',
-        warning: 'ML service is currently unavailable',
+        message: 'Feedback received (ML service temporarily unavailable)',
+        trackId,
+        mood: correctMood,
+        warning: 'Personalization temporarily disabled',
       });
     }
     
-    res.status(500).json({ message: 'Failed to submit feedback' });
+    if (err.response) {
+      console.error('ML API Error:', err.response.data);
+    }
+    
+    res.status(500).json({ 
+      message: 'Failed to submit feedback fully',
+      error: err.message 
+    });
   }
 };
 
@@ -122,12 +148,15 @@ export const sharePlaylist = async (req, res) => {
       owner: req.user._id,
     });
 
-    console.log(`Playlist ${playlistId} shared with ID ${shareId}`);
+    console.log(`✅ Playlist ${playlistId} shared with ID ${shareId}`);
+
+    const fullUrl = `${process.env.FRONTEND_URL || 'https://moodiq.netlify.app'}/share/${shareId}`;
 
     res.json({
       shareId,
       shareUrl: `/share/${shareId}`,
-      fullUrl: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/share/${shareId}`,
+      fullUrl: fullUrl,
+      message: 'Playlist shared successfully',
     });
 
   } catch (err) {
@@ -160,6 +189,8 @@ export const getSharedPlaylist = async (req, res) => {
     sharedData.views = (sharedData.views || 0) + 1;
     await sharedData.save();
 
+    console.log(`👁️ Shared playlist ${shareId} viewed (total views: ${sharedData.views})`);
+
     res.json({
       shareId: sharedData.shareId,
       playlistId: sharedData.playlistId,
@@ -186,7 +217,7 @@ export const getUserShares = async (req, res) => {
   try {
     const shares = await SharedPlaylist.find({ owner: req.user._id })
       .sort({ createdAt: -1 })
-      .select('shareId playlistId playlistName views createdAt');
+      .select('shareId playlistId playlistName playlistImage views createdAt');
 
     res.json({
       shares,
@@ -219,6 +250,8 @@ export const deleteShare = async (req, res) => {
 
     await share.deleteOne();
 
+    console.log(`🗑️ Deleted share ${shareId}`);
+
     res.json({ 
       message: 'Share deleted successfully',
       shareId 
@@ -231,7 +264,7 @@ export const deleteShare = async (req, res) => {
 };
 
 /**
- * @desc    Handle voice/chat commands
+ * @desc    Handle voice/chat commands via ML NLP service
  * @route   POST /api/user/voice-command
  * @access  Protected
  */
@@ -243,40 +276,60 @@ export const handleVoiceCommand = async (req, res) => {
   }
 
   try {
+    console.log(`🗣️ Processing voice command: "${command}"`);
+    
     // Send command to ML API for natural language processing
-    const response = await axios.post(`${ML_API_URL}/nlp/command`, {
-      command,
-      context: context || {},
-      user_id: req.user._id.toString(),
-    }, {
-      timeout: 15000
-    });
+    const response = await axios.post(
+      `${ML_API_URL}/nlp/command`,
+      {
+        command,
+        context: context || {},
+        user_id: req.user._id.toString(),
+      },
+      {
+        timeout: 15000,
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      }
+    );
+
+    console.log(`✅ NLP command processed: ${response.data.action}`);
 
     res.json({
       success: true,
       action: response.data.action,
       parameters: response.data.parameters,
       response: response.data.response,
+      confidence: response.data.confidence || 0.85,
     });
 
   } catch (err) {
-    console.error('Error processing voice command:', err.message);
+    console.error('❌ Error processing voice command:', err.message);
     
     // Provide a fallback response if ML API is unavailable
     if (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
       return res.json({
         success: false,
-        message: 'Voice command service is currently unavailable',
+        action: 'error',
+        response: 'Voice command service is temporarily unavailable. Please try again later.',
         error: 'ML_SERVICE_UNAVAILABLE',
       });
     }
 
-    res.status(500).json({ message: 'Failed to process voice command' });
+    if (err.response) {
+      console.error('ML API Error:', err.response.data);
+    }
+
+    res.status(500).json({ 
+      message: 'Failed to process voice command',
+      error: err.message 
+    });
   }
 };
 
 /**
- * @desc    Get user statistics
+ * @desc    Get user statistics and learning progress
  * @route   GET /api/user/stats
  * @access  Protected
  */
@@ -289,17 +342,91 @@ export const getUserStats = async (req, res) => {
     const shares = await SharedPlaylist.find({ owner: req.user._id });
     const totalViews = shares.reduce((sum, share) => sum + (share.views || 0), 0);
 
-    res.json({
-      stats: {
-        sharesCount,
-        totalViews,
-        joinedDate: req.user.createdAt,
-        linkedServices: req.user.authTokens ? Array.from(req.user.authTokens.keys()) : [],
-      },
-    });
+    // Get ML personalization stats
+    let mlStats = null;
+    try {
+      const mlResponse = await axios.get(
+        `${ML_API_URL}/model/user/${req.user._id}/stats`,
+        { timeout: 10000 }
+      );
+      mlStats = mlResponse.data;
+    } catch (mlError) {
+      console.warn('⚠️ Could not fetch ML stats:', mlError.message);
+    }
+
+    const stats = {
+      sharesCount,
+      totalViews,
+      joinedDate: req.user.createdAt,
+      lastActive: req.user.lastActive,
+      playlistsAnalyzed: req.user.playlistsAnalyzed || 0,
+      linkedServices: req.user.authTokens ? Array.from(req.user.authTokens.keys()) : [],
+      
+      // ML personalization stats
+      feedbackCount: mlStats?.feedback_count || 0,
+      personalizationLevel: mlStats?.personalization_level || 'none',
+      hasTrainedModel: mlStats?.has_trained_model || false,
+      lastTrainedAt: mlStats?.last_trained || null,
+    };
+
+    res.json({ stats });
 
   } catch (err) {
     console.error('Error fetching user stats:', err.message);
     res.status(500).json({ message: 'Failed to fetch user statistics' });
+  }
+};
+
+/**
+ * @desc    Trigger personalized model retraining
+ * @route   POST /api/user/retrain-model
+ * @access  Protected
+ */
+export const triggerModelRetrain = async (req, res) => {
+  try {
+    console.log(`🔄 Triggering model retraining for user ${req.user._id}`);
+    
+    const response = await axios.post(
+      `${ML_API_URL}/model/retrain`,
+      {
+        user_id: req.user._id.toString(),
+        min_samples: 10,
+        force: req.body.force || false,
+      },
+      {
+        timeout: 120000, // 2 minute timeout for training
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      }
+    );
+
+    console.log('✅ Model retraining initiated');
+
+    res.json({
+      success: true,
+      message: response.data.message,
+      status: response.data.status,
+      estimatedTime: response.data.estimated_time,
+    });
+
+  } catch (err) {
+    console.error('❌ Error triggering model retrain:', err.message);
+    
+    if (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
+      return res.status(503).json({ 
+        message: 'ML service is currently unavailable',
+        code: 'ML_SERVICE_UNAVAILABLE'
+      });
+    }
+
+    if (err.response) {
+      return res.status(err.response.status).json({ 
+        message: err.response.data?.message || 'Failed to trigger retraining',
+        code: 'ML_API_ERROR'
+      });
+    }
+
+    res.status(500).json({ message: 'Failed to trigger model retraining' });
   }
 };
