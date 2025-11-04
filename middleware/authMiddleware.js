@@ -1,14 +1,44 @@
 import jwt from 'jsonwebtoken';
 import User from '../models/userModel.js';
+import SpotifyWebApi from 'spotify-web-api-node';
+
+/**
+ * Refresh Spotify access token if expired
+ */
+const refreshSpotifyToken = async (user) => {
+  try {
+    console.log('🔄 Refreshing Spotify token for user:', user.displayName);
+    
+    const spotifyApi = new SpotifyWebApi({
+      clientId: process.env.SPOTIFY_CLIENT_ID,
+      clientSecret: process.env.SPOTIFY_CLIENT_SECRET,
+      refreshToken: user.refreshToken,
+    });
+
+    const data = await spotifyApi.refreshAccessToken();
+    const { access_token, expires_in } = data.body;
+    
+    // Update user in database
+    user.accessToken = access_token;
+    user.tokenExpires = new Date(Date.now() + expires_in * 1000);
+    await user.save();
+    
+    console.log('✅ Token refreshed successfully');
+    
+    return access_token;
+  } catch (error) {
+    console.error('❌ Token refresh failed:', error.message);
+    throw error;
+  }
+};
 
 /**
  * Protect routes - verify JWT token and attach user to request
- * FIXED: Better error handling to prevent infinite reloads
+ * AUTO-REFRESHES expired Spotify tokens
  */
 export const protect = async (req, res, next) => {
   let token;
 
-  // Log incoming request (only for debugging, remove in production)
   console.log(`🔒 Auth: ${req.method} ${req.path}`);
 
   if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
@@ -16,7 +46,7 @@ export const protect = async (req, res, next) => {
       // Get token from header
       token = req.headers.authorization.split(' ')[1];
 
-      // Verify token
+      // Verify JWT token
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
       
       // Get user from token
@@ -30,13 +60,28 @@ export const protect = async (req, res, next) => {
         });
       }
 
-      // CRITICAL: Check if Spotify token is expired
-      if (req.user.tokenExpires && req.user.tokenExpires < Date.now()) {
-        console.log('⚠️  Auth: Spotify token expired for user:', req.user.spotifyId);
+      // ⭐ CRITICAL: Check if Spotify token is expired or about to expire
+      const now = Date.now();
+      const tokenExpires = req.user.tokenExpires ? new Date(req.user.tokenExpires).getTime() : 0;
+      const timeUntilExpiry = tokenExpires - now;
+      
+      // Refresh if token expired or expires in less than 5 minutes
+      if (timeUntilExpiry < 5 * 60 * 1000) {
+        console.log('⚠️ Spotify token expired or expiring soon, refreshing...');
         
-        // Don't return error immediately - let the request continue
-        // The controller will handle refreshing the token
-        console.log('⏭️  Auth: Continuing request (controller will handle refresh)');
+        try {
+          const newAccessToken = await refreshSpotifyToken(req.user);
+          req.user.accessToken = newAccessToken;
+          console.log('✅ Token auto-refreshed successfully');
+        } catch (refreshError) {
+          console.error('❌ Token refresh failed:', refreshError.message);
+          return res.status(401).json({ 
+            message: 'Your Spotify session has expired. Please log in again.',
+            code: 'SPOTIFY_TOKEN_REFRESH_FAILED'
+          });
+        }
+      } else {
+        console.log(`✅ Token valid for ${Math.floor(timeUntilExpiry / 60000)} more minutes`);
       }
 
       console.log('✅ Auth: User authenticated:', req.user.displayName);
@@ -85,9 +130,24 @@ export const optionalAuth = async (req, res, next) => {
       token = req.headers.authorization.split(' ')[1];
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
       req.user = await User.findById(decoded.id).select('-password');
+      
+      // Also check and refresh Spotify token if needed
+      if (req.user) {
+        const now = Date.now();
+        const tokenExpires = req.user.tokenExpires ? new Date(req.user.tokenExpires).getTime() : 0;
+        const timeUntilExpiry = tokenExpires - now;
+        
+        if (timeUntilExpiry < 5 * 60 * 1000) {
+          try {
+            const newAccessToken = await refreshSpotifyToken(req.user);
+            req.user.accessToken = newAccessToken;
+          } catch (refreshError) {
+            console.warn('⚠️ Optional auth token refresh failed:', refreshError.message);
+          }
+        }
+      }
     } catch (error) {
-      // Silently fail - route will work without user
-      console.log('⚠️  Optional auth failed:', error.message);
+      console.log('⚠️ Optional auth failed:', error.message);
     }
   }
 
