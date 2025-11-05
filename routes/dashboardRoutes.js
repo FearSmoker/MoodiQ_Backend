@@ -19,13 +19,13 @@ router.use(protect);
 // Dashboard overview with comprehensive stats
 router.get('/overview', getDashboardOverview);
 
-// Detailed listening statistics (supports time ranges)
+// Detailed listening statistics (supports time ranges: short_term, medium_term, long_term)
 router.get('/listening-stats', getListeningStats);
 
 // Currently playing track with mood analysis
 router.get('/now-playing', getNowPlaying);
 
-// Personalized recommendations
+// Personalized recommendations (ML-powered)
 router.get('/recommendations', getDashboardRecommendations);
 
 export default router;

@@ -11,7 +11,6 @@ import {
   logUserBehavior,
   handleVoiceCommand,
   getUserStats,
-  getUserMoodTimeline,
   getUserPersonalizedModel,
   triggerModelRetrain,
   resetUserPersonalization,
@@ -49,9 +48,6 @@ router.post('/behavior', protect, logUserBehavior);
 // ===============================================
 // Personalization & Model Training
 // ===============================================
-
-// Get user's mood timeline
-router.get('/mood-timeline', protect, getUserMoodTimeline);
 
 // Get personalized model info
 router.get('/personalized-model', protect, getUserPersonalizedModel);

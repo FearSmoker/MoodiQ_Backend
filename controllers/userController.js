@@ -32,7 +32,6 @@ export const updatePreferences = async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // Merge new preferences with existing ones
     user.preferences = {
       ...user.preferences,
       ...req.body,
@@ -53,7 +52,7 @@ export const updatePreferences = async (req, res) => {
 };
 
 /**
- * @desc    Submit feedback for mood prediction (ML model retraining)
+ * @desc    Submit feedback for mood prediction (ML model learning)
  * @route   POST /api/user/feedback
  * @access  Protected
  */
@@ -67,7 +66,6 @@ export const submitFeedback = async (req, res) => {
   try {
     console.log(`📝 Submitting feedback for track ${trackId}: ${correctMood}`);
     
-    // Send feedback to ML API for incremental learning
     const feedbackResponse = await mlService.submitFeedback(
       req.user._id.toString(),
       trackId,
@@ -88,7 +86,6 @@ export const submitFeedback = async (req, res) => {
   } catch (err) {
     console.error('❌ Error submitting feedback:', err.message);
     
-    // Don't fail the request if ML API is down - just acknowledge receipt
     if (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
       console.warn('⚠️ ML service unavailable, feedback logged locally only');
       return res.status(200).json({ 
@@ -97,10 +94,6 @@ export const submitFeedback = async (req, res) => {
         mood: correctMood,
         warning: 'Personalization temporarily disabled',
       });
-    }
-    
-    if (err.response) {
-      console.error('ML API Error:', err.response.data);
     }
     
     res.status(500).json({ 
@@ -125,7 +118,6 @@ export const submitBatchFeedback = async (req, res) => {
   try {
     console.log(`📝 Submitting batch feedback: ${feedbacks.length} items`);
     
-    // Format feedback for ML API
     const formattedFeedbacks = feedbacks.map(fb => ({
       user_id: req.user._id.toString(),
       track_id: fb.trackId,
@@ -193,7 +185,6 @@ export const logUserBehavior = async (req, res) => {
   } catch (err) {
     console.error('❌ Error logging behavior:', err.message);
     
-    // Don't fail silently - behavior logging is important
     if (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
       return res.json({ 
         success: false,
@@ -221,10 +212,8 @@ export const sharePlaylist = async (req, res) => {
   }
 
   try {
-    // Generate unique share ID
     const shareId = Math.random().toString(36).substring(2, 10);
 
-    // Save to database
     const sharedPlaylist = await SharedPlaylist.create({
       shareId,
       playlistId,
@@ -271,7 +260,6 @@ export const getSharedPlaylist = async (req, res) => {
       return res.status(404).json({ message: 'Shared playlist not found' });
     }
 
-    // Increment view count
     sharedData.views = (sharedData.views || 0) + 1;
     await sharedData.save();
 
@@ -364,7 +352,6 @@ export const handleVoiceCommand = async (req, res) => {
   try {
     console.log(`🗣️ Processing voice command: "${command}"`);
     
-    // Send command to ML API for natural language processing
     const response = await mlService.processNLPCommand(
       command,
       context || {},
@@ -384,7 +371,6 @@ export const handleVoiceCommand = async (req, res) => {
   } catch (err) {
     console.error('❌ Error processing voice command:', err.message);
     
-    // Provide a fallback response if ML API is unavailable
     if (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
       return res.json({
         success: false,
@@ -392,10 +378,6 @@ export const handleVoiceCommand = async (req, res) => {
         response: 'Voice command service is temporarily unavailable. Please try again later.',
         error: 'ML_SERVICE_UNAVAILABLE',
       });
-    }
-
-    if (err.response) {
-      console.error('ML API Error:', err.response.data);
     }
 
     res.status(500).json({ 
@@ -412,14 +394,11 @@ export const handleVoiceCommand = async (req, res) => {
  */
 export const getUserStats = async (req, res) => {
   try {
-    // Get shares count
     const sharesCount = await SharedPlaylist.countDocuments({ owner: req.user._id });
 
-    // Get total views on shares
     const shares = await SharedPlaylist.find({ owner: req.user._id });
     const totalViews = shares.reduce((sum, share) => sum + (share.views || 0), 0);
 
-    // Get ML personalization stats
     let mlStats = null;
     try {
       mlStats = await mlService.getUserLearningStats(req.user._id.toString());
@@ -435,7 +414,6 @@ export const getUserStats = async (req, res) => {
       playlistsAnalyzed: req.user.playlistsAnalyzed || 0,
       linkedServices: req.user.authTokens ? Array.from(req.user.authTokens.keys()) : [],
       
-      // ML personalization stats
       feedbackCount: mlStats?.feedback_count || 0,
       personalizationLevel: mlStats?.personalization_level || 'none',
       hasTrainedModel: mlStats?.has_trained_model || false,
@@ -466,7 +444,7 @@ export const getUserMoodTimeline = async (req, res) => {
       parseInt(days)
     );
 
-    console.log(`✅ Retrieved timeline with ${timelineResponse.timeline.length} data points`);
+    console.log(`✅ Retrieved timeline with ${timelineResponse.timeline?.length || 0} data points`);
 
     res.json(timelineResponse);
 
@@ -532,7 +510,7 @@ export const triggerModelRetrain = async (req, res) => {
     
     const response = await mlService.triggerModelRetrain(
       req.user._id.toString(),
-      10, // min_samples
+      10,
       force
     );
 

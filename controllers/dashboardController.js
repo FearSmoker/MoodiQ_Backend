@@ -4,6 +4,11 @@ import SharedPlaylist from '../models/sharedPlaylistModel.js';
 import * as mlService from '../services/mlService.js';
 
 /**
+ * Dashboard Controller - Complete ML Integration v2.0
+ * Uses HYBRID approach: Spotify API + ML Service
+ */
+
+/**
  * @desc    Get comprehensive dashboard overview data
  * @route   GET /api/dashboard/overview
  * @access  Protected
@@ -13,7 +18,6 @@ export const getDashboardOverview = async (req, res) => {
     console.log('📊 Dashboard: Fetching overview for user:', req.user.displayName);
     const user = req.user;
     
-    // Initialize Spotify API with user's token
     const spotifyApi = new SpotifyWebApi();
     spotifyApi.setAccessToken(user.accessToken);
 
@@ -89,22 +93,74 @@ export const getDashboardOverview = async (req, res) => {
 
     const peakHour = hourlyActivity.indexOf(Math.max(...hourlyActivity));
 
-    // Currently playing track
-    const nowPlaying = currentlyPlaying?.body?.item ? {
-      isPlaying: currentlyPlaying.body.is_playing,
-      trackId: currentlyPlaying.body.item.id,
-      trackName: currentlyPlaying.body.item.name,
-      artists: currentlyPlaying.body.item.artists.map(a => ({ id: a.id, name: a.name })),
-      albumName: currentlyPlaying.body.item.album.name,
-      albumImage: currentlyPlaying.body.item.album.images[0]?.url,
-      duration: currentlyPlaying.body.item.duration_ms,
-      progress: currentlyPlaying.body.progress_ms,
-      externalUrl: currentlyPlaying.body.item.external_urls.spotify,
-      device: {
-        name: currentlyPlaying.body.device?.name,
-        type: currentlyPlaying.body.device?.type,
+    // Currently playing track with ML mood analysis
+    let nowPlaying = null;
+    if (currentlyPlaying?.body?.item) {
+      console.log('🎵 Analyzing currently playing track with ML...');
+      
+      try {
+        // Get ML mood analysis for currently playing track
+        const moodAnalysis = await mlService.analyzeCurrentlyPlaying(
+          user.accessToken,
+          user._id.toString()
+        );
+
+        nowPlaying = {
+          isPlaying: currentlyPlaying.body.is_playing,
+          trackId: currentlyPlaying.body.item.id,
+          trackName: currentlyPlaying.body.item.name,
+          artists: currentlyPlaying.body.item.artists.map(a => ({ id: a.id, name: a.name })),
+          albumName: currentlyPlaying.body.item.album.name,
+          albumImage: currentlyPlaying.body.item.album.images[0]?.url,
+          duration: currentlyPlaying.body.item.duration_ms,
+          progress: currentlyPlaying.body.progress_ms,
+          externalUrl: currentlyPlaying.body.item.external_urls.spotify,
+          device: {
+            name: currentlyPlaying.body.device?.name,
+            type: currentlyPlaying.body.device?.type,
+          },
+          // ML mood analysis
+          mood: {
+            fused_mood: moodAnalysis.mood_analysis?.fused_mood || 'Unknown',
+            confidence: moodAnalysis.mood_analysis?.confidence || 0,
+            audio_mood: moodAnalysis.mood_analysis?.audio_mood || 'Unknown',
+            lyrics_mood: moodAnalysis.mood_analysis?.lyrics_mood || 'Neutral',
+            scores: moodAnalysis.mood_analysis?.scores || {}
+          }
+        };
+
+        console.log(`✅ Currently playing mood: ${nowPlaying.mood.fused_mood}`);
+      } catch (mlError) {
+        console.warn('⚠️ ML mood analysis unavailable for now playing:', mlError.message);
+        
+        // Fallback: basic info without mood
+        nowPlaying = {
+          isPlaying: currentlyPlaying.body.is_playing,
+          trackId: currentlyPlaying.body.item.id,
+          trackName: currentlyPlaying.body.item.name,
+          artists: currentlyPlaying.body.item.artists.map(a => ({ id: a.id, name: a.name })),
+          albumName: currentlyPlaying.body.item.album.name,
+          albumImage: currentlyPlaying.body.item.album.images[0]?.url,
+          duration: currentlyPlaying.body.item.duration_ms,
+          progress: currentlyPlaying.body.progress_ms,
+          externalUrl: currentlyPlaying.body.item.external_urls.spotify,
+          device: {
+            name: currentlyPlaying.body.device?.name,
+            type: currentlyPlaying.body.device?.type,
+          },
+          mood: null
+        };
       }
-    } : null;
+    }
+
+    // Get user's ML learning stats
+    let mlStats = null;
+    try {
+      mlStats = await mlService.getUserLearningStats(user._id.toString());
+      console.log(`📊 ML Stats: ${mlStats.feedback_count} feedbacks, personalization: ${mlStats.personalization_level}`);
+    } catch (mlError) {
+      console.warn('⚠️ ML stats unavailable:', mlError.message);
+    }
 
     // Response data
     const dashboardData = {
@@ -119,7 +175,13 @@ export const getDashboardOverview = async (req, res) => {
         preferences: user.preferences,
         linkedServices: user.linkedServices || [],
       },
-      stats,
+      stats: {
+        ...stats,
+        // Add ML personalization stats
+        feedbackCount: mlStats?.feedback_count || 0,
+        personalizationLevel: mlStats?.personalization_level || 'none',
+        hasTrainedModel: mlStats?.has_trained_model || false,
+      },
       playlists: userPlaylists.body.items.slice(0, 50).map(playlist => ({
         id: playlist.id,
         name: playlist.name,
@@ -173,6 +235,13 @@ export const getDashboardOverview = async (req, res) => {
         createdAt: share.createdAt,
         shareUrl: `/share/${share.shareId}`,
       })),
+      mlInsights: mlStats ? {
+        feedbackCount: mlStats.feedback_count,
+        personalizationLevel: mlStats.personalization_level,
+        hasTrainedModel: mlStats.has_trained_model,
+        moodPreferences: mlStats.mood_corrections || {},
+        lastTrained: mlStats.last_trained,
+      } : null
     };
 
     console.log('✅ Dashboard: Overview data compiled successfully');
@@ -181,7 +250,6 @@ export const getDashboardOverview = async (req, res) => {
   } catch (error) {
     console.error('❌ Dashboard overview error:', error.message);
     
-    // Handle token expiration
     if (error.statusCode === 401) {
       return res.status(401).json({ 
         message: 'Spotify token expired',
@@ -204,7 +272,7 @@ export const getDashboardOverview = async (req, res) => {
 export const getListeningStats = async (req, res) => {
   try {
     const user = req.user;
-    const { timeRange = 'medium_term' } = req.query; // short_term, medium_term, long_term
+    const { timeRange = 'medium_term' } = req.query;
 
     console.log(`📊 Listening Stats: Fetching for ${timeRange}`);
 
@@ -216,10 +284,6 @@ export const getListeningStats = async (req, res) => {
       spotifyApi.getMyTopArtists({ limit: 50, time_range: timeRange }),
       spotifyApi.getMyRecentlyPlayedTracks({ limit: 50 }),
     ]);
-
-    // Get audio features for top tracks
-    const trackIds = topTracks.body.items.map(t => t.id);
-    const audioFeatures = await spotifyApi.getAudioFeaturesForTracks(trackIds);
 
     // Calculate listening patterns
     const listeningPatterns = {
@@ -235,29 +299,6 @@ export const getListeningStats = async (req, res) => {
         topTracks.body.items.length
       ),
     };
-
-    // Audio features analysis
-    const avgFeatures = {
-      energy: 0,
-      valence: 0,
-      danceability: 0,
-      acousticness: 0,
-      instrumentalness: 0,
-      speechiness: 0,
-      tempo: 0,
-    };
-
-    audioFeatures.body.audio_features.forEach(feature => {
-      if (feature) {
-        Object.keys(avgFeatures).forEach(key => {
-          avgFeatures[key] += feature[key] || 0;
-        });
-      }
-    });
-
-    Object.keys(avgFeatures).forEach(key => {
-      avgFeatures[key] = avgFeatures[key] / audioFeatures.body.audio_features.length;
-    });
 
     // Genre distribution
     const genreCount = {};
@@ -288,6 +329,8 @@ export const getListeningStats = async (req, res) => {
       dayDistribution[day]++;
     });
 
+    console.log('✅ Listening stats compiled successfully');
+
     res.json({
       timeRange,
       timeRangeLabel: {
@@ -296,7 +339,6 @@ export const getListeningStats = async (req, res) => {
         'long_term': 'All Time'
       }[timeRange],
       patterns: listeningPatterns,
-      audioProfile: avgFeatures,
       genreDistribution,
       hourDistribution: hourDistribution.map((count, hour) => ({ 
         hour: `${hour}:00`, 
@@ -306,7 +348,7 @@ export const getListeningStats = async (req, res) => {
         day: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][day],
         count
       })),
-      topTracks: topTracks.body.items.map((track, index) => ({
+      topTracks: topTracks.body.items.slice(0, 20).map((track, index) => ({
         rank: index + 1,
         id: track.id,
         name: track.name,
@@ -314,9 +356,8 @@ export const getListeningStats = async (req, res) => {
         album: track.album.name,
         popularity: track.popularity,
         duration: track.duration_ms,
-        audioFeatures: audioFeatures.body.audio_features[index],
       })),
-      topArtists: topArtists.body.items.map((artist, index) => ({
+      topArtists: topArtists.body.items.slice(0, 20).map((artist, index) => ({
         rank: index + 1,
         id: artist.id,
         name: artist.name,
@@ -325,8 +366,6 @@ export const getListeningStats = async (req, res) => {
         followers: artist.followers?.total || 0,
       })),
     });
-
-    console.log('✅ Listening stats fetched successfully');
 
   } catch (error) {
     console.error('❌ Listening stats error:', error.message);
@@ -346,7 +385,7 @@ export const getListeningStats = async (req, res) => {
 };
 
 /**
- * @desc    Get user's currently playing track with real-time mood analysis
+ * @desc    Get currently playing track with ML mood analysis
  * @route   GET /api/dashboard/now-playing
  * @access  Protected
  */
@@ -354,65 +393,49 @@ export const getNowPlaying = async (req, res) => {
   try {
     const user = req.user;
 
-    const spotifyApi = new SpotifyWebApi();
-    spotifyApi.setAccessToken(user.accessToken);
+    console.log(`🎵 Fetching now playing with ML analysis for: ${user.displayName}`);
 
-    const currentlyPlaying = await spotifyApi.getMyCurrentPlayingTrack();
+    // Use ML service's currently playing analysis (HYBRID)
+    const nowPlayingAnalysis = await mlService.analyzeCurrentlyPlaying(
+      user.accessToken,
+      user._id.toString()
+    );
 
-    if (!currentlyPlaying.body || !currentlyPlaying.body.item) {
+    if (!nowPlayingAnalysis.is_playing) {
       return res.json({
         isPlaying: false,
         message: 'No track currently playing',
       });
     }
 
-    const track = currentlyPlaying.body.item;
-    
-    // Try to get real-time mood analysis from ML service
-    let moodData = null;
-    try {
-      const realtimeAnalysis = await mlService.analyzeRealtime(
-        track.id,
-        user._id.toString(),
-        user.accessToken
-      );
-      moodData = {
-        mood: realtimeAnalysis.mood?.fused_mood || 'Unknown',
-        confidence: realtimeAnalysis.mood?.confidence || 0,
-        audioFeatures: realtimeAnalysis.mood?.scores || null
-      };
-    } catch (mlError) {
-      console.warn('⚠️ ML real-time analysis unavailable:', mlError.message);
-      // Continue without mood data
-    }
+    console.log(`✅ Now playing: ${nowPlayingAnalysis.track.name} - Mood: ${nowPlayingAnalysis.mood_analysis?.fused_mood}`);
     
     res.json({
-      isPlaying: currentlyPlaying.body.is_playing,
+      isPlaying: nowPlayingAnalysis.is_playing,
       track: {
-        id: track.id,
-        name: track.name,
-        artists: track.artists.map(a => ({ id: a.id, name: a.name })),
+        id: nowPlayingAnalysis.track.id,
+        name: nowPlayingAnalysis.track.name,
+        artists: nowPlayingAnalysis.track.artists,
         album: {
-          name: track.album.name,
-          images: track.album.images,
+          name: nowPlayingAnalysis.track.album.name || nowPlayingAnalysis.track.album,
+          images: nowPlayingAnalysis.track.images || nowPlayingAnalysis.track.album?.images || [],
         },
-        duration: track.duration_ms,
-        progress: currentlyPlaying.body.progress_ms,
-        progressPercentage: Math.round((currentlyPlaying.body.progress_ms / track.duration_ms) * 100),
-        externalUrl: track.external_urls.spotify,
-        previewUrl: track.preview_url,
+        duration: nowPlayingAnalysis.track.duration_ms,
+        progress: nowPlayingAnalysis.progress_ms,
+        progressPercentage: Math.round((nowPlayingAnalysis.progress_ms / nowPlayingAnalysis.track.duration_ms) * 100),
+        externalUrl: nowPlayingAnalysis.track.external_url,
+        popularity: nowPlayingAnalysis.track.popularity,
       },
-      mood: moodData,
-      device: {
-        name: currentlyPlaying.body.device?.name,
-        type: currentlyPlaying.body.device?.type,
-        volume: currentlyPlaying.body.device?.volume_percent,
+      mood: {
+        fused_mood: nowPlayingAnalysis.mood_analysis?.fused_mood || 'Unknown',
+        confidence: nowPlayingAnalysis.mood_analysis?.confidence || 0,
+        audio_mood: nowPlayingAnalysis.mood_analysis?.audio_mood || 'Unknown',
+        lyrics_mood: nowPlayingAnalysis.mood_analysis?.lyrics_mood || 'Neutral',
+        scores: nowPlayingAnalysis.mood_analysis?.scores || {}
       },
-      context: currentlyPlaying.body.context ? {
-        type: currentlyPlaying.body.context.type,
-        uri: currentlyPlaying.body.context.uri,
-      } : null,
-      timestamp: new Date().toISOString(),
+      device: nowPlayingAnalysis.device,
+      context: nowPlayingAnalysis.context || null,
+      timestamp: nowPlayingAnalysis.timestamp || new Date().toISOString(),
     });
 
   } catch (error) {
@@ -425,7 +448,13 @@ export const getNowPlaying = async (req, res) => {
       });
     }
 
-    // Return empty state instead of error for better UX
+    if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
+      return res.json({
+        isPlaying: false,
+        message: 'ML service temporarily unavailable',
+      });
+    }
+
     res.json({
       isPlaying: false,
       message: 'Unable to fetch currently playing track',
@@ -434,59 +463,33 @@ export const getNowPlaying = async (req, res) => {
 };
 
 /**
- * @desc    Get personalized music recommendations
+ * @desc    Get personalized music recommendations with ML
  * @route   GET /api/dashboard/recommendations
  * @access  Protected
  */
 export const getDashboardRecommendations = async (req, res) => {
   try {
     const user = req.user;
-    const { limit = 20, seedType = 'tracks' } = req.query;
+    const { limit = 20 } = req.query;
 
-    const spotifyApi = new SpotifyWebApi();
-    spotifyApi.setAccessToken(user.accessToken);
+    console.log(`🎯 Fetching personalized recommendations with ML`);
 
-    // Get user's top items to use as seeds
-    const topTracks = await spotifyApi.getMyTopTracks({ limit: 5, time_range: 'short_term' });
-    const topArtists = await spotifyApi.getMyTopArtists({ limit: 3, time_range: 'short_term' });
-    
-    const seedTracks = topTracks.body.items.slice(0, 3).map(track => track.id);
-    const seedArtists = topArtists.body.items.slice(0, 2).map(artist => artist.id);
+    // Use ML service for personalized recommendations
+    const recommendations = await mlService.generatePersonalizedPlaylist(
+      user._id.toString(),
+      user.accessToken,
+      parseInt(limit)
+    );
 
-    // Get recommendations
-    const recommendations = await spotifyApi.getRecommendations({
-      seed_tracks: seedType === 'tracks' ? seedTracks : [],
-      seed_artists: seedType === 'artists' ? seedArtists : seedArtists.slice(0, 2),
-      limit: parseInt(limit),
-      market: 'US',
-    });
+    console.log(`✅ Generated ${recommendations.tracks?.length || 0} personalized recommendations`);
 
     res.json({
-      recommendations: recommendations.body.tracks.map(track => ({
-        id: track.id,
-        name: track.name,
-        artists: track.artists.map(a => ({ id: a.id, name: a.name })),
-        album: {
-          name: track.album.name,
-          images: track.album.images,
-        },
-        duration: track.duration_ms,
-        popularity: track.popularity,
-        previewUrl: track.preview_url,
-        externalUrl: track.external_urls.spotify,
-      })),
-      seeds: {
-        tracks: topTracks.body.items.slice(0, 3).map(track => ({
-          id: track.id,
-          name: track.name,
-          artists: track.artists.map(a => a.name),
-        })),
-        artists: topArtists.body.items.slice(0, 2).map(artist => ({
-          id: artist.id,
-          name: artist.name,
-        })),
-      },
-      total: recommendations.body.tracks.length,
+      recommendations: recommendations.tracks || [],
+      personalized: recommendations.personalized || false,
+      userPreferences: recommendations.user_preferences || {},
+      source: 'ml_personalized',
+      total: recommendations.total || 0,
+      message: recommendations.message,
     });
 
   } catch (error) {
@@ -496,6 +499,13 @@ export const getDashboardRecommendations = async (req, res) => {
       return res.status(401).json({ 
         message: 'Spotify token expired',
         code: 'SPOTIFY_TOKEN_EXPIRED'
+      });
+    }
+
+    if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
+      return res.status(503).json({ 
+        message: 'ML service is currently unavailable',
+        code: 'ML_SERVICE_UNAVAILABLE'
       });
     }
 

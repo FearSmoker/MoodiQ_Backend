@@ -26,7 +26,7 @@ router.get('/activity', getActivityAnalytics);
 // Genre analysis
 router.get('/genres', getGenreAnalysis);
 
-// User mood timeline (ML-powered)
+// User mood timeline (ML-powered) - PRIMARY ENDPOINT
 router.get('/mood-timeline', getMoodTimeline);
 
 // Real-time current track analysis

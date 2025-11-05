@@ -3,13 +3,15 @@ import {
   getPlaylists, 
   getPlaylist,
   getPlaylistMood, 
+  getCurrentlyPlayingMood,
   optimizePlaylistFlow, 
   detectMoodGaps,
   fillMoodGaps,
   generateMoodPlaylist,
   generateActivityPlaylist,
+  generateFromTopTracks,
+  generateFromRecentlyPlayed,
   getRecommendations,
-  getAudioFeatures,
   createPlaylist,
   reorderPlaylist,
 } from '../controllers/playlistController.js';
@@ -37,11 +39,16 @@ router.post('/create', createPlaylist);
 router.put('/:id/reorder', reorderPlaylist);
 
 // ===============================================
-// ML-Powered Mood Features
+// ML-Powered Mood Features (HYBRID APPROACH)
 // ===============================================
 
-// Analyze playlist mood
+// Analyze playlist mood using HYBRID approach
+// Uses: Spotify API + Multi-API Stack
 router.post('/mood', getPlaylistMood);
+
+// Analyze currently playing track (NEW - HYBRID)
+// Uses: Spotify currently-playing + Multi-API features
+router.get('/currently-playing', getCurrentlyPlayingMood);
 
 // Optimize playlist flow
 router.post('/optimize', optimizePlaylistFlow);
@@ -53,23 +60,30 @@ router.post('/gaps', detectMoodGaps);
 router.post('/fill-gaps', fillMoodGaps);
 
 // ===============================================
-// Playlist Generation
+// Playlist Generation (HYBRID SPOTIFY INTEGRATION)
 // ===============================================
 
 // Generate mood-based playlist
+// Uses: Spotify metadata + Last.fm recommendations
 router.post('/generate/mood', generateMoodPlaylist);
 
 // Generate activity-based playlist
 router.post('/generate/activity', generateActivityPlaylist);
 
+// Generate from user's top tracks (NEW - SPOTIFY)
+// Uses: Spotify top tracks + Last.fm similar tracks
+router.post('/generate/from-top-tracks', generateFromTopTracks);
+
+// Generate from recently played (NEW - SPOTIFY)
+// Uses: Spotify recently played + Last.fm recommendations
+router.post('/generate/from-recently-played', generateFromRecentlyPlayed);
+
 // ===============================================
-// Recommendations & Features
+// Recommendations (HYBRID)
 // ===============================================
 
-// Get hybrid recommendations
+// Get personalized hybrid recommendations
+// Uses: User history + Spotify + Last.fm
 router.post('/recommendations', getRecommendations);
-
-// Get audio features for tracks
-router.post('/features', getAudioFeatures);
 
 export default router;
