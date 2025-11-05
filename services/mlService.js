@@ -2,14 +2,12 @@ import axios from 'axios';
 import { ML_API_URL } from '../utils/constants.js';
 
 /**
- * ML Service Integration - Updated for Spotify Service v2.5.1
- * 
- * Updates:
- * - ✅ Better error handling for new Spotify exceptions
- * - ✅ Rate limit detection and handling
- * - ✅ Token expiration handling
- * - ✅ Retry logic for transient failures
- * - ✅ Support for paginated responses
+ * ML Service Integration - COMPLETE v3.0
+ * Updated for new model features:
+ * - Advanced playlist aggregation
+ * - Live listening queue
+ * - MongoDB recommendations
+ * - Enhanced analytics
  */
 
 const mlClient = axios.create({
@@ -32,7 +30,7 @@ mlClient.interceptors.request.use(
   }
 );
 
-// Response interceptor with enhanced error handling
+// Response interceptor
 mlClient.interceptors.response.use(
   (response) => {
     console.log(`✅ ML API Response: ${response.config.url} - ${response.status}`);
@@ -46,20 +44,14 @@ mlClient.interceptors.response.use(
       const status = error.response.status;
       const data = error.response.data;
       
-      // Enhanced error logging
       if (status === 401) {
-        console.error('❌ ML API Auth Error: Token expired or invalid');
+        console.error('❌ ML API Auth Error');
         error.isAuthError = true;
       } else if (status === 429) {
         const retryAfter = error.response.headers?.['retry-after'] || 60;
         console.error(`❌ ML API Rate Limit: Retry after ${retryAfter}s`);
         error.isRateLimitError = true;
         error.retryAfter = parseInt(retryAfter);
-      } else if (status === 404) {
-        console.error('❌ ML API Not Found:', data?.detail || 'Resource not found');
-        error.isNotFoundError = true;
-      } else {
-        console.error(`❌ ML API Error: ${status} - ${data?.detail || error.message}`);
       }
     }
     return Promise.reject(error);
@@ -67,32 +59,12 @@ mlClient.interceptors.response.use(
 );
 
 // ============================================
-// 1. MOOD PREDICTION ENDPOINTS (WITH SPOTIFY TOKEN)
+// 1. MOOD PREDICTION (HYBRID SPOTIFY)
 // ============================================
 
 /**
- * Analyze Spotify track by ID (HYBRID APPROACH)
- * Uses Spotify metadata + Multi-API features
- */
-export const analyzeSpotifyTrack = async (trackId, accessToken, userId = null) => {
-  try {
-    const response = await mlClient.post('/predict/spotify/track', {
-      track_id: trackId,
-      user_id: userId
-    }, {
-      headers: {
-        'Authorization': `Bearer ${accessToken}`
-      }
-    });
-    return response.data;
-  } catch (error) {
-    throw enhanceError(error, 'analyze Spotify track');
-  }
-};
-
-/**
- * Analyze Spotify playlist (HYBRID APPROACH) - UPDATED
- * Now supports playlists with 100+ tracks via pagination
+ * Analyze Spotify playlist with ADVANCED AGGREGATION
+ * Returns aggregated_features for graphing
  */
 export const analyzeSpotifyPlaylist = async (playlistId, accessToken, userId = null, includeUnavailable = false) => {
   try {
@@ -105,6 +77,8 @@ export const analyzeSpotifyPlaylist = async (playlistId, accessToken, userId = n
         'Authorization': `Bearer ${accessToken}`
       }
     });
+    
+    // Response now includes aggregated_features and aggregatedMoodTags
     return response.data;
   } catch (error) {
     throw enhanceError(error, 'analyze Spotify playlist');
@@ -112,8 +86,7 @@ export const analyzeSpotifyPlaylist = async (playlistId, accessToken, userId = n
 };
 
 /**
- * Analyze currently playing track (HYBRID APPROACH) - UPDATED
- * Now supports podcasts and enhanced device info
+ * Analyze currently playing track
  */
 export const analyzeCurrentlyPlaying = async (accessToken, userId = null) => {
   try {
@@ -130,93 +103,7 @@ export const analyzeCurrentlyPlaying = async (accessToken, userId = null) => {
 };
 
 /**
- * Get user's Spotify playlists with mood data - UPDATED
- * Now supports pagination for 50+ playlists
- */
-export const getUserSpotifyPlaylists = async (accessToken, fetchAll = true) => {
-  try {
-    const response = await mlClient.get('/predict/spotify/playlists', {
-      params: { fetch_all: fetchAll },
-      headers: {
-        'Authorization': `Bearer ${accessToken}`
-      }
-    });
-    return response.data;
-  } catch (error) {
-    throw enhanceError(error, 'get Spotify playlists');
-  }
-};
-
-/**
- * Test Spotify connection and token validity - NEW
- */
-export const testSpotifyConnection = async (accessToken) => {
-  try {
-    const response = await mlClient.get('/predict/spotify/test-connection', {
-      headers: {
-        'Authorization': `Bearer ${accessToken}`
-      }
-    });
-    return response.data;
-  } catch (error) {
-    throw enhanceError(error, 'test Spotify connection');
-  }
-};
-
-/**
- * Legacy: Analyze single track by name (Multi-API only)
- */
-export const analyzeSingleTrack = async (trackName, artistName, userId = null, genre = null) => {
-  try {
-    const response = await mlClient.post('/predict/track', {
-      track_name: trackName,
-      artist_name: artistName,
-      user_id: userId,
-      genre: genre
-    });
-    return response.data;
-  } catch (error) {
-    throw enhanceError(error, 'analyze track');
-  }
-};
-
-/**
- * Legacy: Analyze playlist by track list (Multi-API only)
- */
-export const analyzePlaylistMood = async (tracks, userId = null) => {
-  try {
-    const formattedTracks = tracks.map(track => ({
-      name: track.name || track.track_name,
-      artist: track.artist || track.artist_name || (track.artists?.[0]?.name) || (track.artists?.[0])
-    }));
-
-    const response = await mlClient.post('/predict/playlist', {
-      tracks: formattedTracks,
-      user_id: userId
-    });
-    return response.data;
-  } catch (error) {
-    throw enhanceError(error, 'analyze playlist');
-  }
-};
-
-/**
- * Search and analyze track
- */
-export const searchAndAnalyze = async (query, userId = null) => {
-  try {
-    const response = await mlClient.post('/predict/search-and-analyze', {
-      query: query,
-      user_id: userId
-    });
-    return response.data;
-  } catch (error) {
-    throw enhanceError(error, 'search and analyze');
-  }
-};
-
-/**
- * Batch analyze tracks
+ * Batch analyze tracks (legacy Multi-API)
  */
 export const batchAnalyzeTracks = async (tracks, userId = null) => {
   try {
@@ -231,12 +118,86 @@ export const batchAnalyzeTracks = async (tracks, userId = null) => {
 };
 
 // ============================================
-// 2. PLAYLIST GENERATION ENDPOINTS (WITH SPOTIFY TOKEN)
+// 2. LIVE LISTENING QUEUE (NEW)
 // ============================================
 
 /**
- * Generate mood-based playlist (HYBRID)
+ * Start a live listening session
  */
+export const startLiveSession = async (userId) => {
+  try {
+    const response = await mlClient.post('/live/session/start', {
+      user_id: userId
+    });
+    return response.data;
+  } catch (error) {
+    throw enhanceError(error, 'start live session');
+  }
+};
+
+/**
+ * Add track to live session
+ */
+export const addTrackToLiveSession = async (userId, sessionId, trackName, artistName, trackId = null) => {
+  try {
+    const response = await mlClient.post('/live/session/add-track', {
+      user_id: userId,
+      session_id: sessionId,
+      track_id: trackId,
+      track_name: trackName,
+      artist_name: artistName
+    });
+    return response.data;
+  } catch (error) {
+    throw enhanceError(error, 'add track to live session');
+  }
+};
+
+/**
+ * Get current live session analytics
+ */
+export const getCurrentLiveSession = async (userId) => {
+  try {
+    const response = await mlClient.get(`/live/session/${userId}/current`);
+    return response.data;
+  } catch (error) {
+    throw enhanceError(error, 'get current live session');
+  }
+};
+
+/**
+ * End live session and save to MongoDB
+ */
+export const endLiveSession = async (userId, sessionId) => {
+  try {
+    const response = await mlClient.post('/live/session/end', {
+      user_id: userId,
+      session_id: sessionId
+    });
+    return response.data;
+  } catch (error) {
+    throw enhanceError(error, 'end live session');
+  }
+};
+
+/**
+ * Auto-check for session timeout
+ */
+export const autoCheckLiveSession = async (userId) => {
+  try {
+    const response = await mlClient.post(`/live/session/auto-check/${userId}`);
+    return response.data;
+  } catch (error) {
+    // Don't throw for auto-check failures
+    console.warn('Failed to auto-check session:', error.message);
+    return { auto_ended: false };
+  }
+};
+
+// ============================================
+// 3. PLAYLIST GENERATION
+// ============================================
+
 export const generateMoodPlaylist = async (targetMood, userId, accessToken, seedTrackId = null, limit = 20) => {
   try {
     const response = await mlClient.post('/generate/playlist', {
@@ -255,9 +216,6 @@ export const generateMoodPlaylist = async (targetMood, userId, accessToken, seed
   }
 };
 
-/**
- * Generate activity-based playlist (HYBRID)
- */
 export const generateActivityPlaylist = async (activity, userId, accessToken, seedTrackId = null, limit = 20) => {
   try {
     const response = await mlClient.post('/generate/activity', {
@@ -276,9 +234,6 @@ export const generateActivityPlaylist = async (activity, userId, accessToken, se
   }
 };
 
-/**
- * Generate from user's top tracks (SPOTIFY INTEGRATION)
- */
 export const generateFromTopTracks = async (userId, accessToken, targetMood = null, limit = 20, timeRange = 'medium_term') => {
   try {
     const response = await mlClient.post('/generate/spotify/from-top-tracks', {
@@ -297,9 +252,6 @@ export const generateFromTopTracks = async (userId, accessToken, targetMood = nu
   }
 };
 
-/**
- * Generate from recently played (SPOTIFY INTEGRATION)
- */
 export const generateFromRecentlyPlayed = async (userId, accessToken, targetMood = null, limit = 20) => {
   try {
     const response = await mlClient.post('/generate/spotify/from-recently-played', {
@@ -317,25 +269,6 @@ export const generateFromRecentlyPlayed = async (userId, accessToken, targetMood
   }
 };
 
-/**
- * Discover new tracks based on artist
- */
-export const discoverTracks = async (artistName, userId, limit = 20) => {
-  try {
-    const response = await mlClient.post('/generate/discover', {
-      artist_name: artistName,
-      user_id: userId,
-      limit: limit
-    });
-    return response.data;
-  } catch (error) {
-    throw enhanceError(error, 'discover tracks');
-  }
-};
-
-/**
- * Generate personalized playlist based on user history
- */
 export const generatePersonalizedPlaylist = async (userId, accessToken, limit = 30) => {
   try {
     const response = await mlClient.post('/generate/personalized', {
@@ -353,12 +286,30 @@ export const generatePersonalizedPlaylist = async (userId, accessToken, limit = 
 };
 
 // ============================================
-// 3. OPTIMIZATION ENDPOINTS
+// 4. DATABASE RECOMMENDATIONS (NEW)
 // ============================================
 
 /**
- * Optimize playlist flow
+ * Get MongoDB-powered recommendations based on playlist
  */
+export const getDatabaseRecommendations = async (userId, playlistId = null, targetMood = null, limit = 50) => {
+  try {
+    const response = await mlClient.post('/generate/database-recommendations', {
+      user_id: userId,
+      playlist_id: playlistId,
+      target_mood: targetMood,
+      limit: Math.min(limit, 50)
+    });
+    return response.data;
+  } catch (error) {
+    throw enhanceError(error, 'get database recommendations');
+  }
+};
+
+// ============================================
+// 5. OPTIMIZATION
+// ============================================
+
 export const optimizePlaylistFlow = async (tracks, startMood = null, endMood = null, algorithm = 'dynamic_programming', userId = null) => {
   try {
     const response = await mlClient.post('/optimize/flow', {
@@ -374,25 +325,10 @@ export const optimizePlaylistFlow = async (tracks, startMood = null, endMood = n
   }
 };
 
-/**
- * Get available optimization algorithms
- */
-export const getOptimizationAlgorithms = async () => {
-  try {
-    const response = await mlClient.get('/optimize/algorithms');
-    return response.data;
-  } catch (error) {
-    throw enhanceError(error, 'get optimization algorithms');
-  }
-};
-
 // ============================================
-// 4. TRAINING & PERSONALIZATION ENDPOINTS
+// 6. TRAINING & PERSONALIZATION
 // ============================================
 
-/**
- * Submit user feedback
- */
 export const submitFeedback = async (userId, trackId, feedbackMood, playlistId = null) => {
   try {
     const response = await mlClient.post('/model/feedback', {
@@ -408,9 +344,6 @@ export const submitFeedback = async (userId, trackId, feedbackMood, playlistId =
   }
 };
 
-/**
- * Submit batch feedback
- */
 export const submitBatchFeedback = async (feedbackList) => {
   try {
     const response = await mlClient.post('/model/batch-feedback', feedbackList);
@@ -420,9 +353,6 @@ export const submitBatchFeedback = async (feedbackList) => {
   }
 };
 
-/**
- * Trigger model retraining
- */
 export const triggerModelRetrain = async (userId, minSamples = 10, force = false) => {
   try {
     const response = await mlClient.post('/model/retrain', {
@@ -436,9 +366,6 @@ export const triggerModelRetrain = async (userId, minSamples = 10, force = false
   }
 };
 
-/**
- * Get user learning stats
- */
 export const getUserLearningStats = async (userId) => {
   try {
     const response = await mlClient.get(`/model/user/${userId}/stats`);
@@ -448,9 +375,6 @@ export const getUserLearningStats = async (userId) => {
   }
 };
 
-/**
- * Get user personalized model
- */
 export const getUserPersonalizedModel = async (userId) => {
   try {
     const response = await mlClient.get(`/model/user/${userId}/model`);
@@ -460,9 +384,6 @@ export const getUserPersonalizedModel = async (userId) => {
   }
 };
 
-/**
- * Reset user personalization
- */
 export const resetUserPersonalization = async (userId) => {
   try {
     const response = await mlClient.delete(`/model/user/${userId}/reset`);
@@ -472,9 +393,6 @@ export const resetUserPersonalization = async (userId) => {
   }
 };
 
-/**
- * Log user behavior (implicit learning)
- */
 export const logUserBehavior = async (userId, trackId, action, timeOfDay = null) => {
   try {
     const response = await mlClient.post('/model/behavior/log', {
@@ -486,18 +404,18 @@ export const logUserBehavior = async (userId, trackId, action, timeOfDay = null)
     });
     return response.data;
   } catch (error) {
-    // Don't throw for behavior logging - fail silently
     console.warn('Failed to log behavior:', error.message);
     return null;
   }
 };
 
 // ============================================
-// 5. ANALYTICS ENDPOINTS
+// 7. ANALYTICS (ENHANCED)
 // ============================================
 
 /**
- * Get user mood timeline
+ * Get user mood timeline with aggregated features
+ * Returns data suitable for graphing
  */
 export const getUserMoodTimeline = async (userId, days = 7) => {
   try {
@@ -511,29 +429,75 @@ export const getUserMoodTimeline = async (userId, days = 7) => {
 };
 
 /**
- * Analyze real-time playback (SPOTIFY INTEGRATION)
+ * Get user mood distribution
  */
-export const analyzeRealtime = async (accessToken, userId) => {
+export const getUserMoodDistribution = async (userId) => {
   try {
-    const response = await mlClient.get('/predict/spotify/currently-playing', {
-      params: { user_id: userId },
-      headers: {
-        'Authorization': `Bearer ${accessToken}`
-      }
+    const response = await mlClient.get(`/analytics/user/${userId}/mood-distribution`);
+    return response.data;
+  } catch (error) {
+    throw enhanceError(error, 'get mood distribution');
+  }
+};
+
+/**
+ * Get mood patterns (co-occurrence analysis)
+ */
+export const getUserMoodPatterns = async (userId) => {
+  try {
+    const response = await mlClient.get(`/analytics/user/${userId}/mood-patterns`);
+    return response.data;
+  } catch (error) {
+    throw enhanceError(error, 'get mood patterns');
+  }
+};
+
+/**
+ * Get feedback statistics
+ */
+export const getUserFeedbackStats = async (userId) => {
+  try {
+    const response = await mlClient.get(`/analytics/user/${userId}/feedback-stats`);
+    return response.data;
+  } catch (error) {
+    throw enhanceError(error, 'get feedback stats');
+  }
+};
+
+/**
+ * Get global mood trends
+ */
+export const getGlobalMoodTrends = async (limit = 100) => {
+  try {
+    const response = await mlClient.get('/analytics/global/mood-trends', {
+      params: { limit: limit }
     });
     return response.data;
   } catch (error) {
-    throw enhanceError(error, 'analyze realtime');
+    throw enhanceError(error, 'get global trends');
+  }
+};
+
+/**
+ * Get MongoDB session history (for long-term graphs)
+ */
+export const getUserSessionHistory = async (userId, days = 30) => {
+  try {
+    // This would query MongoDB directly via your backend
+    // For now, use timeline endpoint
+    const response = await mlClient.get(`/analytics/user/${userId}/timeline`, {
+      params: { days: days }
+    });
+    return response.data;
+  } catch (error) {
+    throw enhanceError(error, 'get session history');
   }
 };
 
 // ============================================
-// 6. NLP COMMAND PROCESSING
+// 8. NLP COMMANDS
 // ============================================
 
-/**
- * Process NLP command
- */
 export const processNLPCommand = async (command, context, userId) => {
   try {
     const response = await mlClient.post('/nlp/command', {
@@ -548,12 +512,9 @@ export const processNLPCommand = async (command, context, userId) => {
 };
 
 // ============================================
-// 7. HEALTH & STATS ENDPOINTS
+// 9. HEALTH & STATS
 // ============================================
 
-/**
- * Check ML service health
- */
 export const checkHealth = async () => {
   try {
     const response = await mlClient.get('/health');
@@ -563,9 +524,6 @@ export const checkHealth = async () => {
   }
 };
 
-/**
- * Get ML service stats
- */
 export const getMLStats = async () => {
   try {
     const response = await mlClient.get('/stats');
@@ -575,56 +533,22 @@ export const getMLStats = async () => {
   }
 };
 
-/**
- * Get API integration info
- */
-export const getAPIInfo = async () => {
-  try {
-    const response = await mlClient.get('/api-info');
-    return response.data;
-  } catch (error) {
-    throw enhanceError(error, 'get API info');
-  }
-};
-
-/**
- * Get rate limit status - NEW
- */
-export const getRateLimitStatus = async () => {
-  try {
-    const response = await mlClient.get('/predict/spotify/rate-limit-status');
-    return response.data;
-  } catch (error) {
-    throw enhanceError(error, 'get rate limit status');
-  }
-};
-
 // ============================================
-// 8. HELPER FUNCTIONS
+// 10. HELPER FUNCTIONS
 // ============================================
 
-/**
- * Enhance error with additional context
- */
 const enhanceError = (error, operation) => {
   const enhanced = new Error(`Failed to ${operation}: ${error.message}`);
   enhanced.original = error;
   enhanced.operation = operation;
-  
-  // Copy over special properties
   enhanced.isAuthError = error.isAuthError || false;
   enhanced.isRateLimitError = error.isRateLimitError || false;
-  enhanced.isNotFoundError = error.isNotFoundError || false;
   enhanced.mlServiceUnavailable = error.mlServiceUnavailable || false;
   enhanced.retryAfter = error.retryAfter || null;
   enhanced.statusCode = error.response?.status || null;
-  
   return enhanced;
 };
 
-/**
- * Format tracks for ML API
- */
 export const formatTracksForML = (spotifyTracks) => {
   return spotifyTracks.map(track => ({
     id: track.id,
@@ -636,35 +560,6 @@ export const formatTracksForML = (spotifyTracks) => {
   }));
 };
 
-/**
- * Check if ML service is available
- */
-export const isMLServiceAvailable = async () => {
-  const health = await checkHealth();
-  return health.available;
-};
-
-/**
- * Get mood color for visualization
- */
-export const getMoodColor = (mood) => {
-  const colors = {
-    'Happy': '#FFD700',
-    'Sad': '#4169E1',
-    'Calm': '#90EE90',
-    'Energetic': '#FF4500',
-    'Angry': '#DC143C',
-    'Focus': '#9370DB',
-    'Melancholic': '#4682B4',
-    'Excited': '#FF6347',
-    'Relaxed': '#98FB98'
-  };
-  return colors[mood] || '#808080';
-};
-
-/**
- * Handle ML service errors gracefully - UPDATED
- */
 export const handleMLError = (error, fallbackMessage = 'ML service temporarily unavailable') => {
   if (error.mlServiceUnavailable) {
     return {
@@ -688,27 +583,9 @@ export const handleMLError = (error, fallbackMessage = 'ML service temporarily u
     return {
       success: false,
       error: 'RATE_LIMIT_EXCEEDED',
-      message: `Rate limit exceeded. Please try again in ${error.retryAfter || 60} seconds.`,
+      message: `Rate limit exceeded. Retry in ${error.retryAfter || 60}s.`,
       retryAfter: error.retryAfter || 60,
       status: 429
-    };
-  }
-
-  if (error.isNotFoundError) {
-    return {
-      success: false,
-      error: 'NOT_FOUND',
-      message: 'Resource not found',
-      status: 404
-    };
-  }
-
-  if (error.response) {
-    return {
-      success: false,
-      error: 'ML_API_ERROR',
-      message: error.response.data?.detail || error.message,
-      status: error.response.status
     };
   }
 
@@ -719,57 +596,31 @@ export const handleMLError = (error, fallbackMessage = 'ML service temporarily u
   };
 };
 
-/**
- * Retry function with exponential backoff
- */
-export const retryWithBackoff = async (fn, maxRetries = 3, baseDelay = 1000) => {
-  for (let i = 0; i < maxRetries; i++) {
-    try {
-      return await fn();
-    } catch (error) {
-      // Don't retry auth or rate limit errors
-      if (error.isAuthError || error.isRateLimitError) {
-        throw error;
-      }
-
-      // Don't retry on last attempt
-      if (i === maxRetries - 1) {
-        throw error;
-      }
-
-      // Exponential backoff
-      const delay = baseDelay * Math.pow(2, i);
-      console.log(`Retry attempt ${i + 1}/${maxRetries} after ${delay}ms...`);
-      await new Promise(resolve => setTimeout(resolve, delay));
-    }
-  }
-};
-
 export default {
-  // Spotify Integration (HYBRID)
-  analyzeSpotifyTrack,
+  // Spotify Integration
   analyzeSpotifyPlaylist,
   analyzeCurrentlyPlaying,
-  getUserSpotifyPlaylists,
-  testSpotifyConnection,
-  
-  // Legacy Multi-API
-  analyzeSingleTrack,
-  analyzePlaylistMood,
-  searchAndAnalyze,
   batchAnalyzeTracks,
 
-  // Playlist Generation (HYBRID)
+  // Live Listening (NEW)
+  startLiveSession,
+  addTrackToLiveSession,
+  getCurrentLiveSession,
+  endLiveSession,
+  autoCheckLiveSession,
+
+  // Playlist Generation
   generateMoodPlaylist,
   generateActivityPlaylist,
   generateFromTopTracks,
   generateFromRecentlyPlayed,
-  discoverTracks,
   generatePersonalizedPlaylist,
+
+  // Database Recommendations (NEW)
+  getDatabaseRecommendations,
 
   // Optimization
   optimizePlaylistFlow,
-  getOptimizationAlgorithms,
 
   // Training & Personalization
   submitFeedback,
@@ -780,23 +631,22 @@ export default {
   resetUserPersonalization,
   logUserBehavior,
 
-  // Analytics
+  // Analytics (ENHANCED)
   getUserMoodTimeline,
-  analyzeRealtime,
+  getUserMoodDistribution,
+  getUserMoodPatterns,
+  getUserFeedbackStats,
+  getGlobalMoodTrends,
+  getUserSessionHistory,
 
   // NLP
   processNLPCommand,
 
-  // Health & Stats
+  // Health
   checkHealth,
   getMLStats,
-  getAPIInfo,
-  getRateLimitStatus,
 
   // Helpers
   formatTracksForML,
-  isMLServiceAvailable,
-  getMoodColor,
-  handleMLError,
-  retryWithBackoff
+  handleMLError
 };

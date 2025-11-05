@@ -2,174 +2,190 @@ import SpotifyWebApi from 'spotify-web-api-node';
 import * as mlService from '../services/mlService.js';
 
 /**
- * Analytics Controller - Updated for Production-Ready Spotify Service v2.5.1
+ * Analytics Controller - Complete ML Integration v3.0
  * 
- * Changes:
- * - ✅ Better error handling for Spotify exceptions
- * - ✅ Support for pagination
- * - ✅ Rate limit handling
- * - ✅ Token expiration detection
- * - ✅ Improved ML service integration
+ * Features:
+ * - ✅ 12-mood system support
+ * - ✅ Aggregated features for graphs
+ * - ✅ Multi-tag mood analysis
+ * - ✅ Live listening integration
+ * - ✅ Enhanced error handling
  */
 
 /**
- * @desc    Get real-time mood analysis from recent listening
+ * @desc    Get comprehensive mood trends with aggregated features
  * @route   GET /api/analytics/mood-trends
  * @access  Protected
  */
 export const getMoodTrends = async (req, res) => {
   try {
     const user = req.user;
-    const { limit = 50 } = req.query;
+    const { limit = 50, days = 7 } = req.query;
 
-    const spotifyApi = new SpotifyWebApi();
-    spotifyApi.setAccessToken(user.accessToken);
+    console.log(`📊 Fetching mood trends for ${days} days, ${limit} tracks`);
 
-    console.log(`📊 Fetching mood trends for ${limit} tracks`);
+    // Use ML service's mood timeline (12-mood system)
+    const timelineResponse = await mlService.getUserMoodTimeline(
+      user._id.toString(),
+      parseInt(days)
+    );
 
-    // Get recently played tracks
-    const recentlyPlayed = await spotifyApi.getMyRecentlyPlayedTracks({ 
-      limit: parseInt(limit) 
-    });
-
-    if (!recentlyPlayed.body.items || recentlyPlayed.body.items.length === 0) {
+    if (!timelineResponse.timeline || timelineResponse.timeline.length === 0) {
       return res.json({
         trends: [],
         moodDistribution: {},
         overallMood: 'Unknown',
-        message: 'No recent listening history'
-      });
-    }
-
-    // Prepare tracks for ML analysis
-    const tracks = recentlyPlayed.body.items.map(item => ({
-      id: item.track.id,
-      name: item.track.name,
-      artist: item.track.artists[0]?.name || 'Unknown',
-      played_at: item.played_at
-    }));
-
-    console.log(`🤖 Analyzing ${tracks.length} tracks with ML service`);
-
-    try {
-      // Use ML service for mood analysis (HYBRID approach)
-      const moodAnalysis = await mlService.batchAnalyzeTracks(
-        tracks,
-        user._id.toString()
-      );
-
-      // Combine Spotify playback data with ML mood analysis
-      const tracksWithMood = recentlyPlayed.body.items.map((item, index) => {
-        const trackMood = moodAnalysis.tracks?.[index];
-        
-        return {
-          timestamp: item.played_at,
-          trackId: item.track.id,
-          trackName: item.track.name,
-          artistName: item.track.artists[0]?.name || 'Unknown',
-          albumName: item.track.album?.name || 'Unknown',
-          albumImage: item.track.album?.images?.[0]?.url || null,
-          duration_ms: item.track.duration_ms,
-          popularity: item.track.popularity,
-          mood: trackMood?.mood || 'Unknown',
-          confidence: trackMood?.moodScore || 0,
-          moodScores: trackMood?.moodDetails?.scores || {},
-        };
-      });
-
-      // Calculate mood distribution
-      const moodCounts = {};
-      tracksWithMood.forEach(track => {
-        const mood = track.mood;
-        moodCounts[mood] = (moodCounts[mood] || 0) + 1;
-      });
-
-      // Overall mood (most common)
-      const overallMood = Object.entries(moodCounts)
-        .sort((a, b) => b[1] - a[1])[0]?.[0] || 'Mixed';
-
-      // Mood distribution percentages
-      const total = tracksWithMood.length;
-      const moodDistribution = {};
-      Object.entries(moodCounts).forEach(([mood, count]) => {
-        moodDistribution[mood] = Math.round((count / total) * 100);
-      });
-
-      console.log(`✅ Mood trends analyzed: ${overallMood} (${total} tracks)`);
-
-      res.json({
-        trends: tracksWithMood,
-        moodDistribution,
-        overallMood,
+        aggregatedFeatures: null,
+        message: 'No mood history found',
         statistics: {
-          totalTracks: tracksWithMood.length,
-          uniqueMoods: Object.keys(moodCounts).length,
-          analyzedAt: new Date().toISOString(),
-          source: 'ml_hybrid'
+          totalTracks: 0,
+          uniqueMoods: 0,
+          analyzedAt: new Date().toISOString()
         }
       });
-
-    } catch (mlError) {
-      console.warn('⚠️ ML analysis unavailable:', mlError.message);
-      
-      // Check if it's a specific ML error type
-      if (mlError.response?.status === 429) {
-        return res.status(429).json({
-          message: 'Rate limit exceeded. Please try again later.',
-          code: 'ML_RATE_LIMIT',
-          retryAfter: mlError.response.headers?.['retry-after'] || 60
-        });
-      }
-
-      if (mlError.response?.status === 401) {
-        return res.status(401).json({
-          message: 'ML service authentication failed',
-          code: 'ML_AUTH_ERROR'
-        });
-      }
-      
-      // Simplified fallback (just return tracks without detailed mood)
-      const simpleTrends = recentlyPlayed.body.items.map(item => ({
-        timestamp: item.played_at,
-        trackId: item.track.id,
-        trackName: item.track.name,
-        artistName: item.track.artists[0]?.name || 'Unknown',
-        albumName: item.track.album?.name || 'Unknown',
-        albumImage: item.track.album?.images?.[0]?.url || null,
-        mood: 'Unknown',
-        confidence: 0,
-        moodScores: {}
-      }));
-
-      res.json({
-        trends: simpleTrends,
-        moodDistribution: { 'Unknown': 100 },
-        overallMood: 'Unknown',
-        message: 'ML service temporarily unavailable',
-        source: 'fallback'
-      });
     }
+
+    // Extract timeline data
+    const timeline = timelineResponse.timeline;
+    
+    // Calculate aggregated features for graphs
+    const aggregatedFeatures = calculateAggregatedFeatures(timeline);
+    
+    // Build mood distribution (12-mood system)
+    const moodDistribution = timelineResponse.overall_statistics?.mood_distribution || {};
+    const overallMood = timelineResponse.overall_statistics?.most_common_mood || 'Unknown';
+
+    // Format trends for frontend
+    const trends = timeline.map(day => ({
+      date: day.date,
+      moods: day.moods,
+      totalTracks: day.total_tracks,
+      totalMoodTags: day.total_mood_tags,
+      dominantMood: day.dominant_mood,
+      moodDiversity: day.mood_diversity,
+      tracks: day.tracks.map(t => ({
+        track: t.track,
+        artist: t.artist,
+        mood: t.mood,
+        allMoods: t.all_moods,
+        confidence: t.confidence
+      }))
+    }));
+
+    console.log(`✅ Mood trends analyzed: ${overallMood} (${trends.length} days)`);
+
+    res.json({
+      trends,
+      moodDistribution,
+      overallMood,
+      aggregatedFeatures,
+      statistics: {
+        totalTracks: timelineResponse.total_tracked,
+        uniqueMoods: timelineResponse.overall_statistics?.mood_diversity || 0,
+        avgMoodsPerTrack: timelineResponse.overall_statistics?.average_moods_per_track || 0,
+        analyzedAt: new Date().toISOString(),
+        source: 'ml_timeline',
+        moodSystem: '12_extended_moods'
+      }
+    });
 
   } catch (error) {
     console.error('❌ Mood trends error:', error.message);
     
-    if (error.statusCode === 401) {
+    if (error.statusCode === 401 || error.isAuthError) {
       return res.status(401).json({ 
-        message: 'Spotify token expired',
-        code: 'SPOTIFY_TOKEN_EXPIRED'
+        message: 'Session expired',
+        code: 'SESSION_EXPIRED'
       });
     }
 
-    if (error.statusCode === 429) {
+    if (error.statusCode === 429 || error.isRateLimitError) {
       return res.status(429).json({
-        message: 'Spotify rate limit exceeded',
-        code: 'SPOTIFY_RATE_LIMIT',
-        retryAfter: error.headers?.['retry-after'] || 60
+        message: 'Rate limit exceeded',
+        code: 'RATE_LIMIT',
+        retryAfter: error.retryAfter || 60
       });
     }
 
     res.status(500).json({ 
       message: 'Failed to fetch mood trends',
+      error: error.message 
+    });
+  }
+};
+
+/**
+ * @desc    Get mood distribution analysis (12-mood system)
+ * @route   GET /api/analytics/mood-distribution
+ * @access  Protected
+ */
+export const getMoodDistribution = async (req, res) => {
+  try {
+    const user = req.user;
+
+    console.log(`📊 Fetching mood distribution for user: ${user._id}`);
+
+    // Use ML service's mood distribution endpoint
+    const distributionResponse = await mlService.getUserMoodDistribution(
+      user._id.toString()
+    );
+
+    if (distributionResponse.total_tracks === 0) {
+      return res.json({
+        distribution: {},
+        totalTracks: 0,
+        totalMoodTags: 0,
+        avgMoodsPerTrack: 0,
+        top3Moods: [],
+        moodDiversity: 0,
+        message: 'No mood data available'
+      });
+    }
+
+    console.log(`✅ Distribution: ${distributionResponse.mood_diversity} moods`);
+
+    res.json({
+      distribution: distributionResponse.distribution,
+      totalTracks: distributionResponse.total_tracks,
+      totalMoodTags: distributionResponse.total_mood_tags,
+      avgMoodsPerTrack: distributionResponse.avg_moods_per_track,
+      top3Moods: distributionResponse.top_3_moods,
+      moodDiversity: distributionResponse.mood_diversity,
+      moodSystem: distributionResponse.mood_system
+    });
+
+  } catch (error) {
+    console.error('❌ Mood distribution error:', error.message);
+    res.status(500).json({ 
+      message: 'Failed to fetch mood distribution',
+      error: error.message 
+    });
+  }
+};
+
+/**
+ * @desc    Get mood patterns (co-occurrence analysis)
+ * @route   GET /api/analytics/mood-patterns
+ * @access  Protected
+ */
+export const getMoodPatterns = async (req, res) => {
+  try {
+    const user = req.user;
+
+    console.log(`🔍 Analyzing mood patterns for user: ${user._id}`);
+
+    const patternsResponse = await mlService.getUserMoodPatterns(
+      user._id.toString()
+    );
+
+    console.log(`✅ Found ${patternsResponse.patterns?.length || 0} mood patterns`);
+
+    res.json(patternsResponse);
+
+  } catch (error) {
+    console.error('❌ Mood patterns error:', error.message);
+    res.status(500).json({ 
+      message: 'Failed to analyze mood patterns',
       error: error.message 
     });
   }
@@ -189,7 +205,6 @@ export const getActivityAnalytics = async (req, res) => {
 
     console.log('📊 Analyzing listening activity patterns');
 
-    // Get recently played tracks (up to 50 max from Spotify)
     const recentlyPlayed = await spotifyApi.getMyRecentlyPlayedTracks({ limit: 50 });
 
     if (!recentlyPlayed.body.items || recentlyPlayed.body.items.length === 0) {
@@ -206,7 +221,6 @@ export const getActivityAnalytics = async (req, res) => {
       });
     }
 
-    // Analyze listening patterns
     const hourlyActivity = Array(24).fill(0);
     const dailyActivity = Array(7).fill(0);
     
@@ -219,18 +233,16 @@ export const getActivityAnalytics = async (req, res) => {
       dailyActivity[day]++;
     });
 
-    // Peak listening times
     const peakHour = hourlyActivity.indexOf(Math.max(...hourlyActivity));
     const peakDay = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][
       dailyActivity.indexOf(Math.max(...dailyActivity))
     ];
 
-    // Artist diversity
     const uniqueArtists = new Set(
       recentlyPlayed.body.items.map(item => item.track.artists[0]?.id).filter(Boolean)
     );
 
-    console.log(`✅ Activity analysis complete: Peak ${peakDay} at ${peakHour}:00`);
+    console.log(`✅ Activity analysis: Peak ${peakDay} at ${peakHour}:00`);
 
     res.json({
       hourlyActivity: hourlyActivity.map((count, hour) => ({
@@ -260,14 +272,6 @@ export const getActivityAnalytics = async (req, res) => {
       });
     }
 
-    if (error.statusCode === 429) {
-      return res.status(429).json({
-        message: 'Spotify rate limit exceeded',
-        code: 'SPOTIFY_RATE_LIMIT',
-        retryAfter: error.headers?.['retry-after'] || 60
-      });
-    }
-
     res.status(500).json({ 
       message: 'Failed to fetch activity analytics',
       error: error.message 
@@ -290,7 +294,6 @@ export const getGenreAnalysis = async (req, res) => {
 
     console.log(`📊 Analyzing genres for time range: ${timeRange}`);
 
-    // Get top artists (max 50 from Spotify)
     const topArtists = await spotifyApi.getMyTopArtists({ 
       limit: 50, 
       time_range: timeRange 
@@ -306,7 +309,6 @@ export const getGenreAnalysis = async (req, res) => {
       });
     }
 
-    // Collect all genres
     const genreCount = {};
     topArtists.body.items.forEach(artist => {
       artist.genres.forEach(genre => {
@@ -314,7 +316,6 @@ export const getGenreAnalysis = async (req, res) => {
       });
     });
 
-    // Sort and format
     const genres = Object.entries(genreCount)
       .sort((a, b) => b[1] - a[1])
       .map(([genre, count]) => ({
@@ -323,7 +324,6 @@ export const getGenreAnalysis = async (req, res) => {
         percentage: Math.round((count / topArtists.body.items.length) * 100),
       }));
 
-    // Group into main categories
     const mainCategories = {
       rock: genres.filter(g => g.genre.includes('rock')).reduce((sum, g) => sum + g.count, 0),
       pop: genres.filter(g => g.genre.includes('pop')).reduce((sum, g) => sum + g.count, 0),
@@ -338,7 +338,7 @@ export const getGenreAnalysis = async (req, res) => {
     const categorizedCount = Object.values(mainCategories).reduce((sum, count) => sum + count, 0);
     mainCategories.other = topArtists.body.items.length - categorizedCount;
 
-    console.log(`✅ Genre analysis complete: ${Object.keys(genreCount).length} unique genres`);
+    console.log(`✅ Genre analysis: ${Object.keys(genreCount).length} unique genres`);
 
     res.json({
       timeRange,
@@ -364,14 +364,6 @@ export const getGenreAnalysis = async (req, res) => {
       });
     }
 
-    if (error.statusCode === 429) {
-      return res.status(429).json({
-        message: 'Spotify rate limit exceeded',
-        code: 'SPOTIFY_RATE_LIMIT',
-        retryAfter: error.headers?.['retry-after'] || 60
-      });
-    }
-
     res.status(500).json({ 
       message: 'Failed to fetch genre analysis',
       error: error.message 
@@ -380,7 +372,7 @@ export const getGenreAnalysis = async (req, res) => {
 };
 
 /**
- * @desc    Get user's mood timeline (ML-powered)
+ * @desc    Get user's mood timeline (ML-powered) - PRIMARY ENDPOINT
  * @route   GET /api/analytics/mood-timeline
  * @access  Protected
  */
@@ -395,26 +387,32 @@ export const getMoodTimeline = async (req, res) => {
       parseInt(days)
     );
 
-    console.log(`✅ Retrieved timeline with ${timelineResponse.timeline?.length || 0} data points`);
+    console.log(`✅ Timeline: ${timelineResponse.timeline?.length || 0} data points`);
+
+    // Add aggregated features for frontend graphs
+    if (timelineResponse.timeline && timelineResponse.timeline.length > 0) {
+      timelineResponse.aggregatedFeatures = calculateAggregatedFeatures(
+        timelineResponse.timeline
+      );
+    }
 
     res.json(timelineResponse);
 
   } catch (err) {
     console.error('❌ Error fetching mood timeline:', err.message);
     
-    // Handle ML service specific errors
-    if (err.response?.status === 429) {
+    if (err.response?.status === 429 || err.isRateLimitError) {
       return res.status(429).json({
-        message: 'ML service rate limit exceeded',
-        code: 'ML_RATE_LIMIT',
-        retryAfter: err.response.headers?.['retry-after'] || 60
+        message: 'Rate limit exceeded',
+        code: 'RATE_LIMIT',
+        retryAfter: err.retryAfter || 60
       });
     }
 
-    if (err.response?.status === 401) {
+    if (err.response?.status === 401 || err.isAuthError) {
       return res.status(401).json({
-        message: 'ML service authentication failed',
-        code: 'ML_AUTH_ERROR'
+        message: 'Authentication failed',
+        code: 'AUTH_ERROR'
       });
     }
     
@@ -433,7 +431,7 @@ export const getMoodTimeline = async (req, res) => {
 };
 
 /**
- * @desc    Get real-time current track analysis (HYBRID) - UPDATED
+ * @desc    Get real-time current track analysis (UPDATED)
  * @route   GET /api/analytics/realtime
  * @access  Protected
  */
@@ -441,10 +439,8 @@ export const getRealtimeAnalysis = async (req, res) => {
   try {
     const user = req.user;
     
-    console.log(`🎵 Analyzing real-time playback for user: ${user.displayName}`);
+    console.log(`🎵 Real-time analysis for user: ${user.displayName}`);
 
-    // Use ML service's currently playing analysis (HYBRID approach)
-    // This now supports the updated spotify_service.py with full pagination and error handling
     const realtimeAnalysis = await mlService.analyzeCurrentlyPlaying(
       user.accessToken,
       user._id.toString()
@@ -458,19 +454,11 @@ export const getRealtimeAnalysis = async (req, res) => {
       });
     }
 
-    // Handle podcast episodes
     if (realtimeAnalysis.type === 'episode') {
       return res.json({
         isPlaying: true,
         type: 'episode',
-        episode: {
-          id: realtimeAnalysis.episode.id,
-          name: realtimeAnalysis.episode.name,
-          show: realtimeAnalysis.episode.show,
-          description: realtimeAnalysis.episode.description,
-          duration: realtimeAnalysis.episode.duration_ms,
-          images: realtimeAnalysis.episode.images
-        },
+        episode: realtimeAnalysis.episode,
         device: realtimeAnalysis.device,
         progress: realtimeAnalysis.progress_ms,
         message: 'Currently playing podcast episode',
@@ -478,42 +466,36 @@ export const getRealtimeAnalysis = async (req, res) => {
       });
     }
 
-    console.log(`✅ Real-time analysis complete: ${realtimeAnalysis.track.name}`);
+    console.log(`✅ Real-time: ${realtimeAnalysis.track.name}`);
 
-    // Format response for frontend (tracks only)
     res.json({
       isPlaying: realtimeAnalysis.is_playing,
-      type: realtimeAnalysis.type || 'track',
+      type: 'track',
       track: {
         id: realtimeAnalysis.track.id,
         name: realtimeAnalysis.track.name,
         artists: realtimeAnalysis.track.artists,
         album: realtimeAnalysis.track.album,
-        albumImage: realtimeAnalysis.track.images?.[0]?.url || realtimeAnalysis.track.album?.images?.[0]?.url,
+        albumImage: realtimeAnalysis.track.album?.images?.[0]?.url,
         duration: realtimeAnalysis.track.duration_ms,
         progress: realtimeAnalysis.progress_ms,
         popularity: realtimeAnalysis.track.popularity,
         explicit: realtimeAnalysis.track.explicit,
         externalUrl: realtimeAnalysis.track.external_url
       },
-      device: {
-        id: realtimeAnalysis.device.id,
-        name: realtimeAnalysis.device.name,
-        type: realtimeAnalysis.device.type,
-        volume: realtimeAnalysis.device.volume_percent,
-        isActive: realtimeAnalysis.device.is_active
-      },
+      device: realtimeAnalysis.device,
       playback: {
         shuffleState: realtimeAnalysis.shuffle_state,
         repeatState: realtimeAnalysis.repeat_state,
         context: realtimeAnalysis.context
       },
       mood: {
-        fused_mood: realtimeAnalysis.mood_analysis?.fused_mood || 'Unknown',
+        primary_mood: realtimeAnalysis.mood_analysis?.primary_mood || 'Unknown',
+        all_moods: realtimeAnalysis.mood_analysis?.all_moods || [],
+        mood_scores: realtimeAnalysis.mood_analysis?.mood_scores || {},
         confidence: realtimeAnalysis.mood_analysis?.confidence || 0,
-        audio_mood: realtimeAnalysis.mood_analysis?.audio_mood || 'Unknown',
+        base_mood: realtimeAnalysis.mood_analysis?.base_mood || 'Unknown',
         lyrics_mood: realtimeAnalysis.mood_analysis?.lyrics_mood || 'Neutral',
-        scores: realtimeAnalysis.mood_analysis?.scores || {},
         source: realtimeAnalysis.mood_analysis?.source || 'ml_model'
       },
       audioFeatures: realtimeAnalysis.audio_features || null,
@@ -524,17 +506,15 @@ export const getRealtimeAnalysis = async (req, res) => {
   } catch (error) {
     console.error('❌ Real-time analysis error:', error.message);
     
-    // Handle Spotify token errors
-    if (error.statusCode === 401 || error.response?.status === 401) {
+    if (error.statusCode === 401 || error.response?.status === 401 || error.isAuthError) {
       return res.status(401).json({ 
-        message: 'Spotify token expired. Please re-authenticate.',
-        code: 'SPOTIFY_TOKEN_EXPIRED'
+        message: 'Session expired',
+        code: 'SESSION_EXPIRED'
       });
     }
 
-    // Handle rate limit errors
-    if (error.statusCode === 429 || error.response?.status === 429) {
-      const retryAfter = error.headers?.['retry-after'] || error.response?.headers?.['retry-after'] || 60;
+    if (error.statusCode === 429 || error.response?.status === 429 || error.isRateLimitError) {
+      const retryAfter = error.retryAfter || error.response?.headers?.['retry-after'] || 60;
       return res.status(429).json({
         message: 'Rate limit exceeded',
         code: 'RATE_LIMIT',
@@ -542,16 +522,14 @@ export const getRealtimeAnalysis = async (req, res) => {
       });
     }
 
-    // Handle ML service unavailable
     if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
       return res.status(503).json({ 
-        message: 'ML service is currently unavailable',
+        message: 'ML service unavailable',
         code: 'ML_SERVICE_UNAVAILABLE'
       });
     }
 
-    // Handle 404 errors
-    if (error.response?.status === 404) {
+    if (error.response?.status === 404 || error.isNotFoundError) {
       return res.status(404).json({
         message: 'Resource not found',
         code: 'NOT_FOUND'
@@ -564,4 +542,192 @@ export const getRealtimeAnalysis = async (req, res) => {
       code: 'INTERNAL_ERROR'
     });
   }
+};
+
+/**
+ * @desc    Get global mood trends
+ * @route   GET /api/analytics/global-trends
+ * @access  Protected
+ */
+export const getGlobalMoodTrends = async (req, res) => {
+  try {
+    const { limit = 100 } = req.query;
+
+    console.log(`🌍 Fetching global mood trends`);
+
+    const globalTrends = await mlService.getGlobalMoodTrends(parseInt(limit));
+
+    console.log(`✅ Global trends: ${globalTrends.mood_diversity} moods`);
+
+    res.json(globalTrends);
+
+  } catch (error) {
+    console.error('❌ Global trends error:', error.message);
+    res.status(500).json({ 
+      message: 'Failed to fetch global trends',
+      error: error.message 
+    });
+  }
+};
+
+/**
+ * @desc    Get live listening session analytics
+ * @route   GET /api/analytics/live-session/:userId
+ * @access  Protected
+ */
+export const getLiveSessionAnalytics = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    // Ensure user can only access their own session
+    if (userId !== req.user._id.toString()) {
+      return res.status(403).json({ 
+        message: 'Access denied',
+        code: 'FORBIDDEN'
+      });
+    }
+
+    console.log(`🎧 Fetching live session for user: ${userId}`);
+
+    const sessionData = await mlService.getCurrentLiveSession(userId);
+
+    res.json(sessionData);
+
+  } catch (error) {
+    console.error('❌ Live session error:', error.message);
+    res.status(500).json({ 
+      message: 'Failed to fetch live session',
+      error: error.message 
+    });
+  }
+};
+
+// ============================================
+// HELPER FUNCTIONS
+// ============================================
+
+/**
+ * Calculate aggregated audio features for frontend graphs
+ */
+function calculateAggregatedFeatures(timeline) {
+  if (!timeline || timeline.length === 0) {
+    return null;
+  }
+
+  const features = {
+    valence: [],
+    energy: [],
+    danceability: [],
+    acousticness: [],
+    dates: []
+  };
+
+  timeline.forEach(day => {
+    if (day.tracks && day.tracks.length > 0) {
+      // Calculate average features for the day
+      const dayFeatures = {
+        valence: 0,
+        energy: 0,
+        danceability: 0,
+        acousticness: 0,
+        count: 0
+      };
+
+      day.tracks.forEach(track => {
+        // Extract features from mood scores or use defaults
+        const moodScores = track.all_moods || [];
+        
+        // Map moods to estimated features (you can enhance this mapping)
+        const estimatedFeatures = estimateFeaturesFromMoods(moodScores);
+        
+        dayFeatures.valence += estimatedFeatures.valence;
+        dayFeatures.energy += estimatedFeatures.energy;
+        dayFeatures.danceability += estimatedFeatures.danceability;
+        dayFeatures.acousticness += estimatedFeatures.acousticness;
+        dayFeatures.count++;
+      });
+
+      if (dayFeatures.count > 0) {
+        features.dates.push(day.date);
+        features.valence.push((dayFeatures.valence / dayFeatures.count).toFixed(2));
+        features.energy.push((dayFeatures.energy / dayFeatures.count).toFixed(2));
+        features.danceability.push((dayFeatures.danceability / dayFeatures.count).toFixed(2));
+        features.acousticness.push((dayFeatures.acousticness / dayFeatures.count).toFixed(2));
+      }
+    }
+  });
+
+  return {
+    timeline: features,
+    summary: {
+      avgValence: calculateAverage(features.valence),
+      avgEnergy: calculateAverage(features.energy),
+      avgDanceability: calculateAverage(features.danceability),
+      avgAcousticness: calculateAverage(features.acousticness)
+    }
+  };
+}
+
+/**
+ * Estimate audio features from mood labels
+ */
+function estimateFeaturesFromMoods(moods) {
+  // Mood to feature mapping (based on 12 extended moods)
+  const moodFeatureMap = {
+    'Joyful': { valence: 0.85, energy: 0.70, danceability: 0.75, acousticness: 0.30 },
+    'Excited': { valence: 0.80, energy: 0.85, danceability: 0.80, acousticness: 0.20 },
+    'Party': { valence: 0.80, energy: 0.90, danceability: 0.90, acousticness: 0.15 },
+    'Melancholic': { valence: 0.20, energy: 0.25, danceability: 0.30, acousticness: 0.70 },
+    'Dreamy': { valence: 0.40, energy: 0.30, danceability: 0.35, acousticness: 0.65 },
+    'Relaxed': { valence: 0.50, energy: 0.25, danceability: 0.30, acousticness: 0.70 },
+    'Chill': { valence: 0.60, energy: 0.30, danceability: 0.45, acousticness: 0.55 },
+    'Focused': { valence: 0.45, energy: 0.40, danceability: 0.35, acousticness: 0.50 },
+    'Romantic': { valence: 0.60, energy: 0.35, danceability: 0.40, acousticness: 0.60 },
+    'Motivated': { valence: 0.65, energy: 0.75, danceability: 0.65, acousticness: 0.30 },
+    'Angry': { valence: 0.25, energy: 0.85, danceability: 0.50, acousticness: 0.20 },
+    'Ambient': { valence: 0.50, energy: 0.20, danceability: 0.25, acousticness: 0.80 }
+  };
+
+  // Default features
+  let features = { valence: 0.5, energy: 0.5, danceability: 0.5, acousticness: 0.5 };
+
+  if (moods && moods.length > 0) {
+    // Average features from all moods
+    const moodFeatures = moods
+      .map(mood => moodFeatureMap[mood])
+      .filter(f => f !== undefined);
+
+    if (moodFeatures.length > 0) {
+      features = {
+        valence: moodFeatures.reduce((sum, f) => sum + f.valence, 0) / moodFeatures.length,
+        energy: moodFeatures.reduce((sum, f) => sum + f.energy, 0) / moodFeatures.length,
+        danceability: moodFeatures.reduce((sum, f) => sum + f.danceability, 0) / moodFeatures.length,
+        acousticness: moodFeatures.reduce((sum, f) => sum + f.acousticness, 0) / moodFeatures.length
+      };
+    }
+  }
+
+  return features;
+}
+
+/**
+ * Calculate average of array values
+ */
+function calculateAverage(arr) {
+  if (!arr || arr.length === 0) return 0;
+  const sum = arr.reduce((acc, val) => acc + parseFloat(val), 0);
+  return (sum / arr.length).toFixed(2);
+}
+
+// Export all functions
+export default {
+  getMoodTrends,
+  getMoodDistribution,
+  getMoodPatterns,
+  getActivityAnalytics,
+  getGenreAnalysis,
+  getMoodTimeline,
+  getRealtimeAnalysis,
+  getGlobalMoodTrends,
+  getLiveSessionAnalytics
 };

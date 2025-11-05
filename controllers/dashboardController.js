@@ -21,7 +21,7 @@ export const getDashboardOverview = async (req, res) => {
     const spotifyApi = new SpotifyWebApi();
     spotifyApi.setAccessToken(user.accessToken);
 
-    // Fetch data in parallel for better performance
+    // Fetch data in parallel
     const [
       userPlaylists,
       topArtists,
@@ -30,7 +30,8 @@ export const getDashboardOverview = async (req, res) => {
       savedTracks,
       userProfile,
       userShares,
-      currentlyPlaying
+      currentlyPlaying,
+      liveSession  // NEW: Check for live session
     ] = await Promise.all([
       spotifyApi.getUserPlaylists(user.spotifyId, { limit: 50 }),
       spotifyApi.getMyTopArtists({ limit: 20, time_range: 'medium_term' }),
@@ -39,7 +40,8 @@ export const getDashboardOverview = async (req, res) => {
       spotifyApi.getMySavedTracks({ limit: 1 }),
       spotifyApi.getMe(),
       SharedPlaylist.find({ owner: user._id }).sort({ createdAt: -1 }).limit(10),
-      spotifyApi.getMyCurrentPlayingTrack().catch(() => null)
+      spotifyApi.getMyCurrentPlayingTrack().catch(() => null),
+      mlService.getCurrentLiveSession(user._id.toString()).catch(() => null)  // NEW
     ]);
 
     // Calculate comprehensive statistics
@@ -182,6 +184,13 @@ export const getDashboardOverview = async (req, res) => {
         personalizationLevel: mlStats?.personalization_level || 'none',
         hasTrainedModel: mlStats?.has_trained_model || false,
       },
+      liveSession: liveSession?.active ? {
+        sessionId: liveSession.session_id,
+        startedAt: liveSession.started_at,
+        trackCount: liveSession.track_count,
+        currentMood: liveSession.current_mood,
+        duration: liveSession.session_duration_minutes
+      } : null,
       playlists: userPlaylists.body.items.slice(0, 50).map(playlist => ({
         id: playlist.id,
         name: playlist.name,
@@ -192,6 +201,7 @@ export const getDashboardOverview = async (req, res) => {
         owner: playlist.owner.display_name,
         externalUrl: playlist.external_urls.spotify,
       })),
+      
       topArtists: topArtists.body.items.map(artist => ({
         id: artist.id,
         name: artist.name,
