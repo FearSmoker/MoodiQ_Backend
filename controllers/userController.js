@@ -212,7 +212,7 @@ export const sharePlaylist = async (req, res) => {
   }
 
   try {
-    const shareId = Math.random().toString(36).substring(2, 10);
+    const shareId = crypto.randomUUID().replace(/-/g, '').substring(0, 12);
 
     const sharedPlaylist = await SharedPlaylist.create({
       shareId,
@@ -510,7 +510,7 @@ export const triggerModelRetrain = async (req, res) => {
     
     const response = await mlService.triggerModelRetrain(
       req.user._id.toString(),
-      10,
+      parseInt(process.env.MIN_FEEDBACK_FOR_RETRAIN || '10'),
       force
     );
 

@@ -3,11 +3,87 @@ import * as mlService from '../services/mlService.js';
 import { getFromCache, setInCache } from '../services/cacheService.js';
 import { broadcastUpdate } from '../services/socketService.js';
 import { CACHE_TTL } from '../utils/constants.js';
+import { analyzePlaylistDirect } from './recommendationsController.js';
 
 const getSpotifyApi = (accessToken) => {
   const spotifyApi = new SpotifyWebApi();
   spotifyApi.setAccessToken(accessToken);
   return spotifyApi;
+};
+
+/**
+ * Maps the mood names shown in the FlowOptimizer dropdown (MOOD_OPTIONS in
+ * FlowOptimizer.jsx) to approximate {valence, energy, danceability} scores.
+ * The Python /optimize/flow endpoint (optimize_router.py) requires
+ * start_mood/end_mood as Dict[str, float] — it cannot accept a bare mood
+ * name string. Without this conversion, every optimize request fails
+ * Pydantic validation (422) and the frontend just shows a generic
+ * "Failed to optimize flow" toast.
+ */
+const MOOD_PROFILES = {
+  joyful:      { valence: 0.85, energy: 0.70, danceability: 0.70 },
+  excited:     { valence: 0.80, energy: 0.85, danceability: 0.75 },
+  party:       { valence: 0.75, energy: 0.85, danceability: 0.90 },
+  melancholic: { valence: 0.20, energy: 0.30, danceability: 0.30 },
+  dreamy:      { valence: 0.55, energy: 0.25, danceability: 0.30 },
+  relaxed:     { valence: 0.60, energy: 0.25, danceability: 0.40 },
+  chill:       { valence: 0.55, energy: 0.35, danceability: 0.45 },
+  focused:     { valence: 0.50, energy: 0.30, danceability: 0.30 },
+  romantic:    { valence: 0.65, energy: 0.35, danceability: 0.45 },
+  motivated:   { valence: 0.70, energy: 0.80, danceability: 0.60 },
+  angry:       { valence: 0.15, energy: 0.85, danceability: 0.40 },
+  ambient:     { valence: 0.50, energy: 0.15, danceability: 0.20 },
+};
+
+/**
+ * Normalizes a mood value coming from the frontend into the
+ * {valence, energy, danceability} shape the ML service expects.
+ * Accepts a mood name string (current frontend behavior), a feature
+ * dict already in the right shape, or null/undefined.
+ */
+const resolveMoodProfile = (moodValue) => {
+  if (!moodValue) return null;
+
+  if (typeof moodValue === 'object') {
+    // Already a feature dict (e.g. {valence, energy, danceability})
+    return moodValue;
+  }
+
+  if (typeof moodValue === 'string') {
+    const profile = MOOD_PROFILES[moodValue.toLowerCase()];
+    if (profile) return profile;
+    console.warn(`⚠️ Unknown mood name "${moodValue}", letting ML service use its default`);
+    return null;
+  }
+
+  return null;
+};
+
+/**
+ * Reconciles two known track shapes into the one FlowOptimizer.jsx actually
+ * reads (`track.mood` as a string, `track.features.{valence,energy,...}`):
+ *
+ *  - ML hybrid path (mlService.analyzeSpotifyPlaylist -> Python
+ *    /predict/spotify/playlist): tracks come back as
+ *    { moodDetails: { primary_mood, scores: {valence, energy, ...} }, ... }
+ *  - Direct fallback path (recommendationsController.analyzePlaylistDirect):
+ *    tracks come back as { mood: "Chill", features: {valence, energy, ...} }
+ *
+ * Without this, FlowOptimizer silently shows "Unknown" mood tags and no
+ * energy/valence badges whenever the ML hybrid path succeeds (the common
+ * case), since it never reads `.moodDetails`.
+ */
+const normalizeTrackForFlow = (track) => {
+  if (!track) return track;
+
+  const features = track.features || track.moodDetails?.scores || null;
+
+  const mood =
+    typeof track.mood === 'string'
+      ? track.mood
+      : track.moodDetails?.primary_mood || track.mood?.primary_mood || 'Unknown';
+
+  return { ...track, mood, features };
 };
 
 /**
@@ -81,65 +157,97 @@ export const getPlaylistMood = async (req, res) => {
 
   try {
     // Check cache first
-    const cachedData = await getFromCache(cacheKey);
+    const cachedData = await getFromCache(cacheKey).catch(() => null);
     if (cachedData) {
       console.log('✅ Returning cached mood data');
       return res.json(cachedData);
     }
 
     console.log('🔍 Analyzing Spotify playlist via ML API (HYBRID)...');
-    
-    // Use ML Service HYBRID approach - passes Spotify token
-    const moodResponse = await mlService.analyzeSpotifyPlaylist(
-      playlistId,
-      user.accessToken,
-      user._id.toString()
-    );
 
-    console.log('✅ ML API mood prediction successful (HYBRID)');
+    let result = null;
+    let mlFailed = false;
 
-    const result = {
-      playlistId,
-      tracks: moodResponse.tracks,
-      total_tracks: moodResponse.total_tracks,
-      moodDistribution: moodResponse.moodDistribution || {},
-      overallMood: moodResponse.overallMood || 'Mixed',
-      mood_diversity: moodResponse.mood_diversity,
-      dominant_percentage: moodResponse.dominant_percentage,
-      analyzedAt: new Date().toISOString(),
-    };
+    // 1. Try ML service first
+    try {
+      const moodResponse = await mlService.analyzeSpotifyPlaylist(
+        playlistId,
+        user.accessToken,
+        user._id.toString()
+      );
 
-    // Cache the result
-    await setInCache(cacheKey, result, CACHE_TTL.MOOD_ANALYSIS);
+      console.log('✅ ML API mood prediction successful (HYBRID)');
+      result = {
+        playlistId,
+        tracks: moodResponse.tracks,
+        total_tracks: moodResponse.total_tracks,
+        moodDistribution: moodResponse.moodDistribution || {},
+        overallMood: moodResponse.overallMood || 'Mixed',
+        mood_diversity: moodResponse.mood_diversity,
+        dominant_percentage: moodResponse.dominant_percentage,
+        source: 'ml_hybrid',
+        analyzedAt: new Date().toISOString(),
+      };
+    } catch (mlErr) {
+      console.warn(`⚠️ ML unavailable (${mlErr.message}), falling back to direct Spotify analysis`);
+      mlFailed = true;
+    }
+
+    // 2. Fallback: direct Spotify audio features + rule-based mood (no ML required)
+    if (mlFailed || !result) {
+      console.log('🎵 Running direct Spotify playlist analysis...');
+      // Simulate a req/res pair to reuse analyzePlaylistDirect
+      const fakeReq = { body: { playlistId }, user };
+      let directResult = null;
+      const fakeRes = {
+        json: (data) => { directResult = data; },
+        status: () => ({ json: () => {} })
+      };
+      await analyzePlaylistDirect(fakeReq, fakeRes);
+      
+      if (directResult) {
+        result = directResult;
+        console.log(`✅ Direct Spotify analysis: ${result.total_tracks} tracks, mood: ${result.overallMood}`);
+      }
+    }
+
+    if (!result) {
+      return res.status(503).json({
+        message: 'Playlist analysis temporarily unavailable. Please try again.',
+        code: 'ANALYSIS_UNAVAILABLE'
+      });
+    }
+
+    // Normalize track shape once, regardless of whether ML hybrid or the
+    // direct fallback produced it, so every downstream consumer
+    // (FlowOptimizer, MoodCloud, detectMoodGaps, etc.) sees the same shape.
+    if (Array.isArray(result.tracks)) {
+      result.tracks = result.tracks.map(normalizeTrackForFlow);
+    }
+
+    // Cache the result — but not if it's a degraded fallback (no audio
+    // features available), since that would keep serving an "all Unknown"
+    // analysis for the full TTL even after the ML service or Spotify's API
+    // recovers.
+    if (result.features_available !== false) {
+      await setInCache(cacheKey, result, CACHE_TTL.MOOD_ANALYSIS).catch(() => {});
+    }
 
     // Send real-time update
-    broadcastUpdate({
-      type: 'playlist_analyzed',
-      userId: user._id.toString(),
-      playlistId: playlistId,
-      overallMood: result.overallMood,
-      trackCount: moodResponse.total_tracks,
-    });
+    try {
+      broadcastUpdate({
+        type: 'playlist_analyzed',
+        userId: user._id.toString(),
+        playlistId: playlistId,
+        overallMood: result.overallMood,
+        trackCount: result.total_tracks,
+      });
+    } catch (_) {}
 
     res.json(result);
 
   } catch (err) {
     console.error('❌ Error analyzing playlist mood:', err.message);
-    
-    if (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
-      return res.status(503).json({ 
-        message: 'ML service is currently unavailable. Please try again later.',
-        code: 'ML_SERVICE_UNAVAILABLE'
-      });
-    }
-    
-    if (err.response) {
-      console.error('ML API Error Response:', err.response.data);
-      return res.status(err.response.status).json({ 
-        message: 'ML API error: ' + (err.response.data?.detail || err.message),
-        code: 'ML_API_ERROR'
-      });
-    }
     
     if (err.statusCode === 401) {
       return res.status(401).json({ 
@@ -186,13 +294,6 @@ export const getCurrentlyPlayingMood = async (req, res) => {
   } catch (err) {
     console.error('❌ Error analyzing currently playing:', err.message);
     
-    if (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
-      return res.status(503).json({ 
-        message: 'ML service is currently unavailable',
-        code: 'ML_SERVICE_UNAVAILABLE'
-      });
-    }
-    
     if (err.statusCode === 401) {
       return res.status(401).json({ 
         message: 'Spotify token expired',
@@ -200,9 +301,10 @@ export const getCurrentlyPlayingMood = async (req, res) => {
       });
     }
     
-    res.status(500).json({ 
-      message: 'Failed to analyze currently playing track',
-      error: err.message 
+    // Return a graceful 200 fallback for 503 / 500 or connection errors
+    return res.json({
+      is_playing: false,
+      message: `Currently playing mood temporarily unavailable (${err.message})`
     });
   }
 };
@@ -221,11 +323,16 @@ export const optimizePlaylistFlow = async (req, res) => {
 
   try {
     console.log(`🔄 Optimizing playlist flow with ${tracks.length} tracks using ${algorithm || 'dynamic_programming'}`);
-    
+
+    // Frontend sends mood NAMES (e.g. "Chill", "Joyful") from the
+    // FlowOptimizer dropdowns. The ML service needs feature score dicts.
+    const startMoodProfile = resolveMoodProfile(startMood);
+    const endMoodProfile = resolveMoodProfile(endMood);
+
     const flowResponse = await mlService.optimizePlaylistFlow(
       tracks,
-      startMood,
-      endMood,
+      startMoodProfile,
+      endMoodProfile,
       algorithm || 'dynamic_programming',
       req.user._id.toString()
     );
@@ -246,6 +353,15 @@ export const optimizePlaylistFlow = async (req, res) => {
       return res.status(503).json({ 
         message: 'ML service is currently unavailable',
         code: 'ML_SERVICE_UNAVAILABLE'
+      });
+    }
+
+    if (err.response?.status === 422) {
+      console.error('❌ ML service rejected the request payload:', JSON.stringify(err.response.data));
+      return res.status(422).json({
+        message: 'Invalid optimization request',
+        code: 'ML_VALIDATION_ERROR',
+        details: err.response.data
       });
     }
     
@@ -269,6 +385,7 @@ export const detectMoodGaps = async (req, res) => {
     console.log(`🔍 Detecting mood gaps in ${tracks.length} tracks`);
     
     const gaps = [];
+    let tracksMissingFeatures = 0;
     
     for (let i = 0; i < tracks.length - 1; i++) {
       const currentMood = tracks[i].moodDetails?.scores || tracks[i].features;
@@ -295,12 +412,26 @@ export const detectMoodGaps = async (req, res) => {
             }
           });
         }
+      } else {
+        tracksMissingFeatures++;
       }
+    }
+
+    if (tracksMissingFeatures > 0) {
+      console.warn(`⚠️ ${tracksMissingFeatures} track pair(s) had no mood/feature data — skipped in gap detection`);
     }
 
     console.log(`✅ Found ${gaps.length} mood gaps`);
 
-    res.json({ gaps, total_gaps: gaps.length, threshold });
+    res.json({
+      gaps,
+      total_gaps: gaps.length,
+      threshold,
+      tracks_missing_features: tracksMissingFeatures,
+      // True if literally none of the tracks had usable mood/feature data,
+      // as opposed to genuinely having no gaps.
+      analysis_incomplete: tracksMissingFeatures === tracks.length - 1 && tracks.length > 1
+    });
 
   } catch (err) {
     console.error('❌ Error detecting mood gaps:', err.message);

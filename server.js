@@ -12,6 +12,8 @@ import transferRoutes from './routes/transferRoutes.js';
 import userRoutes from './routes/userRoutes.js';
 import dashboardRoutes from './routes/dashboardRoutes.js';
 import analyticsRoutes from './routes/analyticsRoutes.js';
+import liveListeningRoutes from './routes/LiveListeningRoutes.js';
+import lyricsRoutes from './routes/lyricsRoutes.js';
 
 // Load services
 import { initSocketService } from './services/socketService.js';
@@ -19,7 +21,12 @@ import { connectRedis } from './services/cacheService.js';
 import * as mlService from './services/mlService.js';
 
 // Config
-dotenv.config();
+// Load environment variables (.env.development in development, .env otherwise)
+if (process.env.NODE_ENV === 'development') {
+  dotenv.config({ path: '.env.development' });
+} else {
+  dotenv.config();
+}
 
 const app = express();
 const server = createServer(app);
@@ -87,6 +94,9 @@ app.use('/api/playlists', playlistRoutes);
 app.use('/api/transfer', transferRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/live', liveListeningRoutes);
+app.use('/api/analytics', analyticsRoutes);
+app.use('/api/lyrics', lyricsRoutes);  // ✅ FIXED: was missing, caused all lyrics to 404
 
 // Root route
 app.get('/', (req, res) => {
@@ -157,7 +167,11 @@ mongoose.connect(process.env.MONGO_URI)
     // Connect to Redis (optional)
     if (process.env.ENABLE_CACHE === 'true' && process.env.REDIS_URL) {
       connectRedis()
-        .then(() => console.log('✅ Connected to Redis'))
+        .then((client) => {
+          if (client) {
+            console.log('✅ Connected to Redis');
+          }
+        })
         .catch((err) => {
           console.warn('⚠️ Redis connection failed:', err.message);
           console.warn('⚠️ Caching disabled, app will continue without Redis');

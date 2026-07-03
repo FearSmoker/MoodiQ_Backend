@@ -1,5 +1,7 @@
 import SpotifyWebApi from 'spotify-web-api-node';
 import * as mlService from '../services/mlService.js';
+import ListeningHistory from '../models/listeningHistoryModel.js';
+import { getAudioFeaturesForTracks, inferMoodFromFeatures, getMoodFromRecentlyPlayed as spotifyMoodFromRecent } from '../controllers/recommendationsController.js';
 
 /**
  * Analytics Controller - Complete ML Integration v3.0
@@ -10,6 +12,7 @@ import * as mlService from '../services/mlService.js';
  * - ✅ Multi-tag mood analysis
  * - ✅ Live listening integration
  * - ✅ Enhanced error handling
+ * - ✅ Spotify-native fallback when ML has no history data
  */
 
 /**
@@ -24,38 +27,116 @@ export const getMoodTrends = async (req, res) => {
 
     console.log(`📊 Fetching mood trends for ${days} days, ${limit} tracks`);
 
-    // Use ML service's mood timeline (12-mood system)
-    const timelineResponse = await mlService.getUserMoodTimeline(
-      user._id.toString(),
-      parseInt(days)
-    );
-
-    if (!timelineResponse.timeline || timelineResponse.timeline.length === 0) {
-      return res.json({
-        trends: [],
-        moodDistribution: {},
-        overallMood: 'Unknown',
-        aggregatedFeatures: null,
-        message: 'No mood history found',
-        statistics: {
-          totalTracks: 0,
-          uniqueMoods: 0,
-          analyzedAt: new Date().toISOString()
-        }
-      });
+    // Try ML service first
+    let timelineResponse = null;
+    try {
+      timelineResponse = await mlService.getUserMoodTimeline(
+        user._id.toString(),
+        parseInt(days),
+        user.accessToken
+      );
+    } catch (mlErr) {
+      console.warn(`⚠️ ML timeline unavailable (${mlErr.message}), falling back to Spotify recently-played`);
     }
 
-    // Extract timeline data
+    // If ML has no data, fall back to Spotify recently-played
+    if (!timelineResponse?.timeline || timelineResponse.timeline.length === 0) {
+      console.log('📊 No ML history — using Spotify recently-played as mood source');
+      
+      try {
+        const spotifyApi = new SpotifyWebApi();
+        spotifyApi.setAccessToken(user.accessToken);
+        
+        const recent = await spotifyApi.getMyRecentlyPlayedTracks({ limit: 50 });
+        const items = recent.body.items || [];
+
+        if (items.length === 0) {
+          return res.json({
+            trends: [],
+            moodDistribution: {},
+            overallMood: 'Unknown',
+            aggregatedFeatures: null,
+            message: 'No listening history found. Listen to some music on Spotify first!',
+            statistics: { totalTracks: 0, uniqueMoods: 0, analyzedAt: new Date().toISOString(), source: 'spotify_fallback' }
+          });
+        }
+
+        // Unique tracks
+        const trackMap = new Map();
+        items.forEach(item => {
+          const t = item?.track;
+          if (t && t.id) trackMap.set(t.id, { ...t, played_at: item.played_at });
+        });
+
+        const featureMap = await getAudioFeaturesForTracks(spotifyApi, Array.from(trackMap.keys()));
+
+        // Build daily mood groups
+        const dayMap = {};
+        const moodDist = {};
+
+        Array.from(trackMap.values()).forEach(track => {
+          const features = featureMap[track.id] || null;
+          const mood = features ? inferMoodFromFeatures(features) : 'Unknown';
+          moodDist[mood] = (moodDist[mood] || 0) + 1;
+
+          const day = track.played_at
+            ? new Date(track.played_at).toISOString().split('T')[0]
+            : new Date().toISOString().split('T')[0];
+
+          if (!dayMap[day]) dayMap[day] = { date: day, moods: {}, tracks: [], total_tracks: 0 };
+          dayMap[day].moods[mood] = (dayMap[day].moods[mood] || 0) + 1;
+          dayMap[day].total_tracks++;
+          dayMap[day].tracks.push({ track: track.name, artist: track.artists?.[0]?.name, mood, confidence: features ? null : null, all_moods: [mood] });
+        });
+
+        const trends = Object.values(dayMap)
+          .sort((a, b) => a.date.localeCompare(b.date))
+          .map(day => ({
+            date: day.date,
+            moods: day.moods,
+            totalTracks: day.total_tracks,
+            totalMoodTags: day.total_tracks,
+            dominantMood: Object.entries(day.moods).sort((a, b) => b[1] - a[1])[0]?.[0] || 'Unknown',
+            moodDiversity: Object.keys(day.moods).length,
+            tracks: day.tracks
+          }));
+
+        const sortedMoods = Object.entries(moodDist).sort((a, b) => b[1] - a[1]);
+        const overallMood = sortedMoods[0]?.[0] || 'Unknown';
+        const aggregatedFeatures = calculateAggregatedFeatures(trends);
+
+        return res.json({
+          trends,
+          moodDistribution: moodDist,
+          overallMood,
+          aggregatedFeatures,
+          statistics: {
+            totalTracks: trackMap.size,
+            uniqueMoods: sortedMoods.length,
+            analyzedAt: new Date().toISOString(),
+            source: 'spotify_recently_played',
+            moodSystem: '12_extended_moods'
+          }
+        });
+      } catch (spotifyErr) {
+        console.error('❌ Spotify fallback also failed:', spotifyErr.message);
+        return res.json({
+          trends: [],
+          moodDistribution: {},
+          overallMood: 'Unknown',
+          aggregatedFeatures: null,
+          message: 'Unable to load mood data. Please try again.',
+          statistics: { totalTracks: 0, uniqueMoods: 0, analyzedAt: new Date().toISOString() }
+        });
+      }
+    }
+
+    // ML data is available — use it
     const timeline = timelineResponse.timeline;
-    
-    // Calculate aggregated features for graphs
     const aggregatedFeatures = calculateAggregatedFeatures(timeline);
-    
-    // Build mood distribution (12-mood system)
     const moodDistribution = timelineResponse.overall_statistics?.mood_distribution || {};
     const overallMood = timelineResponse.overall_statistics?.most_common_mood || 'Unknown';
 
-    // Format trends for frontend
     const trends = timeline.map(day => ({
       date: day.date,
       moods: day.moods,
@@ -91,28 +172,27 @@ export const getMoodTrends = async (req, res) => {
 
   } catch (error) {
     console.error('❌ Mood trends error:', error.message);
-    
+
     if (error.statusCode === 401 || error.isAuthError) {
-      return res.status(401).json({ 
-        message: 'Session expired',
-        code: 'SESSION_EXPIRED'
-      });
+      return res.status(401).json({ message: 'Session expired', code: 'SESSION_EXPIRED' });
     }
 
-    if (error.statusCode === 429 || error.isRateLimitError) {
-      return res.status(429).json({
-        message: 'Rate limit exceeded',
-        code: 'RATE_LIMIT',
-        retryAfter: error.retryAfter || 60
-      });
-    }
-
-    res.status(500).json({ 
-      message: 'Failed to fetch mood trends',
-      error: error.message 
+    res.json({
+      trends: [],
+      moodDistribution: {},
+      overallMood: 'Unknown',
+      aggregatedFeatures: null,
+      message: 'Mood trends temporarily unavailable',
+      statistics: { totalTracks: 0, uniqueMoods: 0, analyzedAt: new Date().toISOString() }
     });
   }
 };
+
+
+
+/**
+
+
 
 /**
  * @desc    Get mood distribution analysis (12-mood system)
@@ -126,11 +206,66 @@ export const getMoodDistribution = async (req, res) => {
     console.log(`📊 Fetching mood distribution for user: ${user._id}`);
 
     // Use ML service's mood distribution endpoint
-    const distributionResponse = await mlService.getUserMoodDistribution(
-      user._id.toString()
-    );
+    let distributionResponse = null;
+    try {
+      distributionResponse = await mlService.getUserMoodDistribution(
+        user._id.toString()
+      );
+    } catch (mlErr) {
+      console.warn(`⚠️ ML distribution unavailable, falling back: ${mlErr.message}`);
+    }
 
-    if (distributionResponse.total_tracks === 0) {
+    if (!distributionResponse || distributionResponse.total_tracks === 0) {
+      console.log('📊 Running Spotify recently-played fallback for mood distribution');
+      const spotifyApi = new SpotifyWebApi({
+        clientId: process.env.SPOTIFY_CLIENT_ID,
+        clientSecret: process.env.SPOTIFY_CLIENT_SECRET,
+      });
+      spotifyApi.setAccessToken(user.accessToken);
+
+      const recentlyPlayed = await spotifyApi.getMyRecentlyPlayedTracks({ limit: 50 }).catch(() => null);
+      if (recentlyPlayed && recentlyPlayed.body && recentlyPlayed.body.items && recentlyPlayed.body.items.length > 0) {
+        const items = recentlyPlayed.body.items;
+        const trackMap = new Map();
+        items.forEach(item => {
+          const t = item.track;
+          if (t && t.id) trackMap.set(t.id, t);
+        });
+
+        const featureMap = await getAudioFeaturesForTracks(spotifyApi, Array.from(trackMap.keys()));
+        const moodDist = {};
+        let totalTags = 0;
+
+        Array.from(trackMap.values()).forEach(track => {
+          const features = featureMap[track.id] || null;
+          const mood = features ? inferMoodFromFeatures(features) : 'Unknown';
+          if (mood !== 'Unknown') {
+            moodDist[mood] = (moodDist[mood] || 0) + 1;
+            totalTags++;
+          }
+        });
+
+        const sortedMoods = Object.entries(moodDist).sort((a, b) => b[1] - a[1]);
+        const distribution = {};
+        for (const [mood, count] of sortedMoods) {
+          distribution[mood] = {
+            count,
+            percentage: Math.round((count / totalTags) * 100 * 10) / 10,
+            avg_confidence: null
+          };
+        }
+
+        return res.json({
+          distribution,
+          totalTracks: trackMap.size,
+          totalMoodTags: totalTags,
+          avgMoodsPerTrack: totalTags > 0 ? (totalTags / trackMap.size) : 0,
+          top3Moods: sortedMoods.map(m => m[0]).slice(0, 3),
+          moodDiversity: Object.keys(moodDist).length,
+          moodSystem: '12_extended_moods'
+        });
+      }
+
       return res.json({
         distribution: {},
         totalTracks: 0,
@@ -199,11 +334,71 @@ export const getMoodPatterns = async (req, res) => {
 export const getActivityAnalytics = async (req, res) => {
   try {
     const user = req.user;
+    const userId = user._id;
 
+    console.log('📊 Analyzing listening activity patterns (MongoDB + Spotify)');
+
+    // --- Try MongoDB first (persistent history) ---
+    let mongoItems = [];
+    try {
+      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      mongoItems = await ListeningHistory.find({
+        userId,
+        playedAt: { $gte: thirtyDaysAgo }
+      }).lean();
+    } catch (mongoErr) {
+      console.warn('⚠️ MongoDB history read failed:', mongoErr.message);
+    }
+
+    // --- Build activity arrays ---
+    const buildActivityFromItems = (items, getDate) => {
+      const hourlyActivity = Array(24).fill(0);
+      const dailyActivity = Array(7).fill(0);
+      const artistSet = new Set();
+      items.forEach(item => {
+        const date = getDate(item);
+        if (!date) return;
+        hourlyActivity[date.getHours()]++;
+        dailyActivity[date.getDay()]++;
+        if (item.artistName) artistSet.add(item.artistName);
+      });
+      return { hourlyActivity, dailyActivity, artistSet, total: items.length };
+    };
+
+    if (mongoItems.length > 0) {
+      const { hourlyActivity, dailyActivity, artistSet, total } = buildActivityFromItems(
+        mongoItems,
+        item => new Date(item.playedAt)
+      );
+
+      const peakHour = hourlyActivity.indexOf(Math.max(...hourlyActivity));
+      const peakDay = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][
+        dailyActivity.indexOf(Math.max(...dailyActivity))
+      ];
+
+      console.log(`✅ Activity from MongoDB (${total} plays): Peak ${peakDay} at ${peakHour}:00`);
+
+      return res.json({
+        hourlyActivity: hourlyActivity.map((count, hour) => ({ hour: `${hour}:00`, plays: count })),
+        dailyActivity: dailyActivity.map((count, index) => ({
+          day: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][index],
+          plays: count,
+        })),
+        insights: {
+          peakHour: `${peakHour}:00 - ${peakHour + 1}:00`,
+          peakDay: peakDay,
+          totalPlays: total,
+          uniqueArtists: artistSet.size,
+          averagePlaysPerDay: Math.round(total / 30),
+        },
+        source: 'mongodb',
+      });
+    }
+
+    // --- Fallback: Spotify recently played (no persistent history yet) ---
+    console.log('📊 No MongoDB history yet — using Spotify recently-played fallback');
     const spotifyApi = new SpotifyWebApi();
     spotifyApi.setAccessToken(user.accessToken);
-
-    console.log('📊 Analyzing listening activity patterns');
 
     const recentlyPlayed = await spotifyApi.getMyRecentlyPlayedTracks({ limit: 50 });
 
@@ -211,44 +406,24 @@ export const getActivityAnalytics = async (req, res) => {
       return res.json({
         hourlyActivity: [],
         dailyActivity: [],
-        insights: {
-          peakHour: 'N/A',
-          peakDay: 'N/A',
-          totalPlays: 0,
-          uniqueArtists: 0,
-          averagePlaysPerDay: 0
-        }
+        insights: { peakHour: 'N/A', peakDay: 'N/A', totalPlays: 0, uniqueArtists: 0, averagePlaysPerDay: 0 }
       });
     }
 
-    const hourlyActivity = Array(24).fill(0);
-    const dailyActivity = Array(7).fill(0);
-    
-    recentlyPlayed.body.items.forEach(item => {
-      const date = new Date(item.played_at);
-      const hour = date.getHours();
-      const day = date.getDay();
-      
-      hourlyActivity[hour]++;
-      dailyActivity[day]++;
-    });
+    const { hourlyActivity, dailyActivity, artistSet, total } = buildActivityFromItems(
+      recentlyPlayed.body.items,
+      item => item.played_at ? new Date(item.played_at) : null
+    );
 
     const peakHour = hourlyActivity.indexOf(Math.max(...hourlyActivity));
     const peakDay = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][
       dailyActivity.indexOf(Math.max(...dailyActivity))
     ];
 
-    const uniqueArtists = new Set(
-      recentlyPlayed.body.items.map(item => item.track.artists[0]?.id).filter(Boolean)
-    );
-
-    console.log(`✅ Activity analysis: Peak ${peakDay} at ${peakHour}:00`);
+    console.log(`✅ Activity from Spotify (${total} plays): Peak ${peakDay} at ${peakHour}:00`);
 
     res.json({
-      hourlyActivity: hourlyActivity.map((count, hour) => ({
-        hour: `${hour}:00`,
-        plays: count,
-      })),
+      hourlyActivity: hourlyActivity.map((count, hour) => ({ hour: `${hour}:00`, plays: count })),
       dailyActivity: dailyActivity.map((count, index) => ({
         day: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][index],
         plays: count,
@@ -256,26 +431,19 @@ export const getActivityAnalytics = async (req, res) => {
       insights: {
         peakHour: `${peakHour}:00 - ${peakHour + 1}:00`,
         peakDay: peakDay,
-        totalPlays: recentlyPlayed.body.items.length,
-        uniqueArtists: uniqueArtists.size,
-        averagePlaysPerDay: Math.round(recentlyPlayed.body.items.length / 7),
+        totalPlays: total,
+        uniqueArtists: artistSet.size,
+        averagePlaysPerDay: Math.round(total / 7),
       },
+      source: 'spotify_fallback',
     });
 
   } catch (error) {
     console.error('❌ Activity analytics error:', error.message);
-    
     if (error.statusCode === 401) {
-      return res.status(401).json({ 
-        message: 'Spotify token expired',
-        code: 'SPOTIFY_TOKEN_EXPIRED'
-      });
+      return res.status(401).json({ message: 'Spotify token expired', code: 'SPOTIFY_TOKEN_EXPIRED' });
     }
-
-    res.status(500).json({ 
-      message: 'Failed to fetch activity analytics',
-      error: error.message 
-    });
+    res.status(500).json({ message: 'Failed to fetch activity analytics', error: error.message });
   }
 };
 
@@ -316,12 +484,14 @@ export const getGenreAnalysis = async (req, res) => {
       });
     });
 
+    const artistsCount = topArtists.body.items.length;
+
     const genres = Object.entries(genreCount)
       .sort((a, b) => b[1] - a[1])
       .map(([genre, count]) => ({
         genre,
         count,
-        percentage: Math.round((count / topArtists.body.items.length) * 100),
+        percentage: artistsCount > 0 ? Math.round((count / artistsCount) * 100) : 0,
       }));
 
     const mainCategories = {
@@ -336,7 +506,7 @@ export const getGenreAnalysis = async (req, res) => {
     };
 
     const categorizedCount = Object.values(mainCategories).reduce((sum, count) => sum + count, 0);
-    mainCategories.other = topArtists.body.items.length - categorizedCount;
+    mainCategories.other = artistsCount - categorizedCount;
 
     console.log(`✅ Genre analysis: ${Object.keys(genreCount).length} unique genres`);
 
@@ -347,11 +517,11 @@ export const getGenreAnalysis = async (req, res) => {
         .map(([category, count]) => ({
           category,
           count,
-          percentage: Math.round((count / topArtists.body.items.length) * 100),
+          percentage: artistsCount > 0 ? Math.round((count / artistsCount) * 100) : 0,
         }))
         .sort((a, b) => b.count - a.count),
       totalGenres: Object.keys(genreCount).length,
-      totalArtists: topArtists.body.items.length,
+      totalArtists: artistsCount,
     });
 
   } catch (error) {
@@ -382,10 +552,125 @@ export const getMoodTimeline = async (req, res) => {
   try {
     console.log(`📈 Fetching mood timeline for ${days} days`);
     
-    const timelineResponse = await mlService.getUserMoodTimeline(
-      req.user._id.toString(),
-      parseInt(days)
-    );
+    let timelineResponse = null;
+    let mlFailed = false;
+
+    try {
+      timelineResponse = await mlService.getUserMoodTimeline(
+        req.user._id.toString(),
+        parseInt(days)
+      );
+      if (!timelineResponse || !timelineResponse.timeline || timelineResponse.timeline.length === 0) {
+        mlFailed = true;
+      }
+    } catch (mlErr) {
+      console.warn(`⚠️ ML timeline unavailable (${mlErr.message}), trying Spotify fallback`);
+      mlFailed = true;
+    }
+
+    if (mlFailed) {
+      console.log('📈 Running direct Spotify fallback for mood timeline');
+      const spotifyApi = new SpotifyWebApi();
+      spotifyApi.setAccessToken(req.user.accessToken);
+      
+      const recent = await spotifyApi.getMyRecentlyPlayedTracks({ limit: 50 }).catch(() => null);
+      const items = recent?.body?.items || [];
+      
+      if (items.length === 0) {
+        return res.json({
+          user_id: req.user._id.toString(),
+          period_days: parseInt(days),
+          timeline: [],
+          total_tracked: 0,
+          overall_statistics: {
+            most_common_mood: 'Unknown',
+            mood_diversity: 0,
+            mood_distribution: {},
+            average_moods_per_track: 0
+          },
+          source: 'spotify_fallback'
+        });
+      }
+
+      // Unique tracks
+      const trackMap = new Map();
+      items.forEach(item => {
+        const t = item?.track;
+        if (t && t.id) trackMap.set(t.id, { ...t, played_at: item.played_at });
+      });
+
+      const featureMap = await getAudioFeaturesForTracks(spotifyApi, Array.from(trackMap.keys()));
+
+      // Check unique days to decide granularity (by time/HH:MM vs by day/YYYY-MM-DD)
+      const uniqueDays = new Set(items.map(item => 
+        item.played_at ? item.played_at.split('T')[0] : new Date().toISOString().split('T')[0]
+      ));
+      const groupByTime = uniqueDays.size <= 1;
+
+      // Build daily/hourly mood groups
+      const dayMap = {};
+      const moodDist = {};
+
+      Array.from(trackMap.values()).forEach(track => {
+        const features = featureMap[track.id] || null;
+        const mood = features ? inferMoodFromFeatures(features) : 'Unknown';
+        moodDist[mood] = (moodDist[mood] || 0) + 1;
+
+        let dateStr;
+        if (groupByTime && track.played_at) {
+          try {
+            const dt = new Date(track.played_at);
+            dateStr = dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          } catch (e) {
+            dateStr = track.played_at.substring(11, 16);
+          }
+        } else {
+          dateStr = track.played_at
+            ? track.played_at.split('T')[0]
+            : new Date().toISOString().split('T')[0];
+        }
+
+        if (!dayMap[dateStr]) dayMap[dateStr] = { date: dateStr, moods: {}, tracks: [], total_tracks: 0 };
+        dayMap[dateStr].moods[mood] = (dayMap[dateStr].moods[mood] || 0) + 1;
+        dayMap[dateStr].total_tracks++;
+        dayMap[dateStr].tracks.push({ 
+          track: track.name, 
+          artist: track.artists?.[0]?.name, 
+          mood, 
+          confidence: null,
+          all_moods: [mood],
+          features: features
+        });
+      });
+
+      const timeline = Object.values(dayMap)
+        .sort((a, b) => a.date.localeCompare(b.date))
+        .map(day => ({
+          date: day.date,
+          dominantMood: Object.entries(day.moods).sort((a, b) => b[1] - a[1])[0]?.[0] || 'Unknown',
+          moodDiversity: Object.keys(day.moods).length,
+          totalTracks: day.total_tracks,
+          moods: day.moods,
+          tracks: day.tracks
+        }));
+
+      const sortedMoods = Object.entries(moodDist).sort((a, b) => b[1] - a[1]);
+      const overallMood = sortedMoods[0]?.[0] || 'Unknown';
+
+      timelineResponse = {
+        user_id: req.user._id.toString(),
+        period_days: parseInt(days),
+        timeline,
+        total_tracked: items.length,
+        overall_statistics: {
+          most_common_mood: overallMood,
+          mood_diversity: sortedMoods.length,
+          mood_distribution: moodDist,
+          average_moods_per_track: trackMap.size > 0 ? (Array.from(trackMap.keys()).length / trackMap.size) : 0
+        },
+        source: 'spotify_fallback'
+      };
+    }
 
     console.log(`✅ Timeline: ${timelineResponse.timeline?.length || 0} data points`);
 
@@ -415,13 +700,6 @@ export const getMoodTimeline = async (req, res) => {
         code: 'AUTH_ERROR'
       });
     }
-    
-    if (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
-      return res.status(503).json({ 
-        message: 'ML service is currently unavailable',
-        code: 'ML_SERVICE_UNAVAILABLE'
-      });
-    }
 
     res.status(500).json({ 
       message: 'Failed to fetch mood timeline',
@@ -441,10 +719,97 @@ export const getRealtimeAnalysis = async (req, res) => {
     
     console.log(`🎵 Real-time analysis for user: ${user.displayName}`);
 
-    const realtimeAnalysis = await mlService.analyzeCurrentlyPlaying(
-      user.accessToken,
-      user._id.toString()
-    );
+    let realtimeAnalysis = null;
+    let mlFailed = false;
+
+    try {
+      realtimeAnalysis = await mlService.analyzeCurrentlyPlaying(
+        user.accessToken,
+        user._id.toString()
+      );
+    } catch (mlErr) {
+      console.warn(`⚠️ ML currently-playing failed (${mlErr.message}), trying Spotify direct fallback`);
+      mlFailed = true;
+    }
+
+    if (mlFailed || !realtimeAnalysis) {
+      const spotifyApi = new SpotifyWebApi();
+      spotifyApi.setAccessToken(user.accessToken);
+
+      const currentlyPlaying = await spotifyApi.getMyCurrentPlayingTrack().catch(() => null);
+      if (!currentlyPlaying || !currentlyPlaying.body || !currentlyPlaying.body.item) {
+        return res.json({
+          isPlaying: false,
+          message: 'No track currently playing',
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      const item = currentlyPlaying.body.item;
+      if (currentlyPlaying.body.currently_playing_type === 'episode') {
+        return res.json({
+          isPlaying: true,
+          type: 'episode',
+          episode: {
+            id: item.id,
+            name: item.name,
+            show: item.show?.name || 'Podcast'
+          },
+          device: currentlyPlaying.body.device || { name: 'Spotify Player', type: 'Computer' },
+          progress: currentlyPlaying.body.progress_ms,
+          message: 'Currently playing podcast episode',
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      // Fetch features
+      let features = null;
+      try {
+        const featResponse = await spotifyApi.getAudioFeaturesForTracks([item.id]);
+        features = featResponse.body.audio_features?.[0] || null;
+      } catch (featErr) {
+        console.warn('⚠️ Fallback features failed in realtime analysis:', featErr.message);
+      }
+
+      const inferredMood = features ? inferMoodFromFeatures(features) : 'Unknown';
+
+      console.log(`✅ Real-time (Fallback): ${item.name} - Mood: ${inferredMood}`);
+
+      return res.json({
+        isPlaying: currentlyPlaying.body.is_playing,
+        type: 'track',
+        track: {
+          id: item.id,
+          name: item.name,
+          artists: item.artists.map(a => ({ id: a.id, name: a.name })),
+          album: item.album,
+          albumImage: item.album?.images?.[0]?.url,
+          duration: item.duration_ms,
+          progress: currentlyPlaying.body.progress_ms || 0,
+          popularity: item.popularity || 50,
+          explicit: item.explicit || false,
+          externalUrl: item.external_urls?.spotify || ''
+        },
+        device: currentlyPlaying.body.device || null,
+        playback: {
+          shuffleState: currentlyPlaying.body.shuffle_state || false,
+          repeatState: currentlyPlaying.body.repeat_state || 'off',
+          context: currentlyPlaying.body.context || null
+        },
+        mood: inferredMood !== 'Unknown' ? {
+          primary_mood: inferredMood,
+          all_moods: [inferredMood],
+          mood_scores: { [inferredMood]: features ? 1.0 : null },
+          confidence: features ? null : null,
+          base_mood: inferredMood,
+          lyrics_mood: null,
+          source: 'rule_based_fallback'
+        } : null,
+        audioFeatures: features,
+        genre: null,
+        timestamp: new Date().toISOString()
+      });
+    }
 
     if (!realtimeAnalysis.is_playing) {
       return res.json({
@@ -522,24 +887,11 @@ export const getRealtimeAnalysis = async (req, res) => {
       });
     }
 
-    if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
-      return res.status(503).json({ 
-        message: 'ML service unavailable',
-        code: 'ML_SERVICE_UNAVAILABLE'
-      });
-    }
-
-    if (error.response?.status === 404 || error.isNotFoundError) {
-      return res.status(404).json({
-        message: 'Resource not found',
-        code: 'NOT_FOUND'
-      });
-    }
-
-    res.status(500).json({ 
-      message: 'Failed to analyze real-time playback',
-      error: error.message,
-      code: 'INTERNAL_ERROR'
+    // Gracefully handle ML service 503, connection refused, timeouts, or transient 500s with a 200 fallback
+    return res.json({
+      isPlaying: false,
+      message: `Real-time playback analysis temporarily unavailable (${error.message})`,
+      timestamp: new Date().toISOString()
     });
   }
 };
@@ -634,16 +986,17 @@ function calculateAggregatedFeatures(timeline) {
       };
 
       day.tracks.forEach(track => {
-        // Extract features from mood scores or use defaults
-        const moodScores = track.all_moods || [];
+        // Use track's actual features if present, otherwise estimate from moods
+        let trackFeatures = track.features;
+        if (!trackFeatures) {
+          const moodScores = track.all_moods || [];
+          trackFeatures = estimateFeaturesFromMoods(moodScores);
+        }
         
-        // Map moods to estimated features (you can enhance this mapping)
-        const estimatedFeatures = estimateFeaturesFromMoods(moodScores);
-        
-        dayFeatures.valence += estimatedFeatures.valence;
-        dayFeatures.energy += estimatedFeatures.energy;
-        dayFeatures.danceability += estimatedFeatures.danceability;
-        dayFeatures.acousticness += estimatedFeatures.acousticness;
+        dayFeatures.valence += trackFeatures.valence !== undefined ? Number(trackFeatures.valence) : 0.5;
+        dayFeatures.energy += trackFeatures.energy !== undefined ? Number(trackFeatures.energy) : 0.5;
+        dayFeatures.danceability += trackFeatures.danceability !== undefined ? Number(trackFeatures.danceability) : 0.5;
+        dayFeatures.acousticness += trackFeatures.acousticness !== undefined ? Number(trackFeatures.acousticness) : 0.5;
         dayFeatures.count++;
       });
 
@@ -672,17 +1025,28 @@ function calculateAggregatedFeatures(timeline) {
  * Estimate audio features from mood labels
  */
 function estimateFeaturesFromMoods(moods) {
-  // Mood to feature mapping (based on 12 extended moods)
+  // Mood to feature mapping (based on 12 extended moods and legacy fallbacks)
   const moodFeatureMap = {
+    // 12 Extended Moods (FastAPI / Retrained Model)
+    'Happy': { valence: 0.85, energy: 0.725, danceability: 0.80, acousticness: 0.25 },
+    'Sad': { valence: 0.15, energy: 0.325, danceability: 0.35, acousticness: 0.60 },
+    'Energetic': { valence: 0.75, energy: 0.90, danceability: 0.70, acousticness: 0.175 },
+    'Calm': { valence: 0.55, energy: 0.30, danceability: 0.45, acousticness: 0.75 },
+    'Focused': { valence: 0.55, energy: 0.50, danceability: 0.55, acousticness: 0.45 },
+    'Romantic': { valence: 0.75, energy: 0.525, danceability: 0.55, acousticness: 0.65 },
+    'Chill': { valence: 0.65, energy: 0.425, danceability: 0.65, acousticness: 0.55 },
+    'Determined': { valence: 0.50, energy: 0.80, danceability: 0.60, acousticness: 0.25 },
+    'Reflective': { valence: 0.45, energy: 0.40, danceability: 0.45, acousticness: 0.75 },
+    'Confident': { valence: 0.75, energy: 0.80, danceability: 0.725, acousticness: 0.25 },
+    'Anxious': { valence: 0.35, energy: 0.60, danceability: 0.40, acousticness: 0.35 },
+    'Excited': { valence: 0.85, energy: 0.90, danceability: 0.80, acousticness: 0.20 },
+
+    // Legacy / Fallback Moods
     'Joyful': { valence: 0.85, energy: 0.70, danceability: 0.75, acousticness: 0.30 },
-    'Excited': { valence: 0.80, energy: 0.85, danceability: 0.80, acousticness: 0.20 },
     'Party': { valence: 0.80, energy: 0.90, danceability: 0.90, acousticness: 0.15 },
     'Melancholic': { valence: 0.20, energy: 0.25, danceability: 0.30, acousticness: 0.70 },
     'Dreamy': { valence: 0.40, energy: 0.30, danceability: 0.35, acousticness: 0.65 },
     'Relaxed': { valence: 0.50, energy: 0.25, danceability: 0.30, acousticness: 0.70 },
-    'Chill': { valence: 0.60, energy: 0.30, danceability: 0.45, acousticness: 0.55 },
-    'Focused': { valence: 0.45, energy: 0.40, danceability: 0.35, acousticness: 0.50 },
-    'Romantic': { valence: 0.60, energy: 0.35, danceability: 0.40, acousticness: 0.60 },
     'Motivated': { valence: 0.65, energy: 0.75, danceability: 0.65, acousticness: 0.30 },
     'Angry': { valence: 0.25, energy: 0.85, danceability: 0.50, acousticness: 0.20 },
     'Ambient': { valence: 0.50, energy: 0.20, danceability: 0.25, acousticness: 0.80 }
@@ -707,8 +1071,9 @@ function estimateFeaturesFromMoods(moods) {
     }
   }
 
-  return features;
+  return { ...features, isEstimate: true };
 }
+
 
 /**
  * Calculate average of array values

@@ -12,16 +12,32 @@ import { ML_API_URL } from '../utils/constants.js';
 
 const mlClient = axios.create({
   baseURL: ML_API_URL,
-  timeout: 90000,
+  // Was 180s — far longer than the frontend's 10s analytics poll interval,
+  // so a single slow response let requests stack up indefinitely and
+  // resolve out of order (stale data overwriting fresh data on screen).
+  // Analytics/read endpoints should fail fast so the frontend's own
+  // Promise.allSettled fallback/error-banner logic can kick in instead.
+  timeout: 20000,
   headers: {
     'Content-Type': 'application/json',
   }
 });
 
+const lastLogTimes = {};
+const logRateLimited = (key, ...args) => {
+  const now = Date.now();
+  if (!lastLogTimes[key] || now - lastLogTimes[key] > 20000) {
+    lastLogTimes[key] = now;
+    console.log(...args);
+  }
+};
+
 // Request interceptor
 mlClient.interceptors.request.use(
   (config) => {
-    console.log(`🤖 ML API Request: ${config.method.toUpperCase()} ${config.url}`);
+    // Resolve base URL dynamically to prevent ES6 import hoisting time issues with dotenv
+    config.baseURL = process.env.ML_API_URL || ML_API_URL;
+    logRateLimited(`ml_req_${config.url}`, `🤖 ML API Request: ${config.method.toUpperCase()} ${config.baseURL}${config.url}`);
     return config;
   },
   (error) => {
@@ -33,7 +49,7 @@ mlClient.interceptors.request.use(
 // Response interceptor
 mlClient.interceptors.response.use(
   (response) => {
-    console.log(`✅ ML API Response: ${response.config.url} - ${response.status}`);
+    logRateLimited(`ml_res_${response.config.url}`, `✅ ML API Response: ${response.config.url} - ${response.status}`);
     return response;
   },
   (error) => {
@@ -73,6 +89,7 @@ export const analyzeSpotifyPlaylist = async (playlistId, accessToken, userId = n
       user_id: userId,
       include_unavailable: includeUnavailable
     }, {
+      timeout: 60000, // analyzing a full playlist can take longer than a simple analytics read
       headers: {
         'Authorization': `Bearer ${accessToken}`
       }
@@ -417,10 +434,13 @@ export const logUserBehavior = async (userId, trackId, action, timeOfDay = null)
  * Get user mood timeline with aggregated features
  * Returns data suitable for graphing
  */
-export const getUserMoodTimeline = async (userId, days = 7) => {
+export const getUserMoodTimeline = async (userId, days = 7, accessToken = null) => {
   try {
     const response = await mlClient.get(`/analytics/user/${userId}/timeline`, {
-      params: { days: days }
+      params: { days: days },
+      headers: accessToken ? {
+                'Authorization': `Bearer ${accessToken}`
+            } : {}
     });
     return response.data;
   } catch (error) {

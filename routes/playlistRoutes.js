@@ -15,6 +15,11 @@ import {
   createPlaylist,
   reorderPlaylist,
 } from '../controllers/playlistController.js';
+import {
+  getSpotifyRecommendations,
+  analyzePlaylistDirect,
+  getMoodFromRecentlyPlayed,
+} from '../controllers/recommendationsController.js';
 import { protect } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
@@ -82,8 +87,21 @@ router.post('/generate/from-recently-played', generateFromRecentlyPlayed);
 // Recommendations (HYBRID)
 // ===============================================
 
-// Get personalized hybrid recommendations
-// Uses: User history + Spotify + Last.fm
+// Get personalized hybrid recommendations (ML-based, may be unavailable)
 router.post('/recommendations', getRecommendations);
+
+// ===============================================
+// Spotify-Native Features (no ML required)
+// ===============================================
+
+// Get recommendations purely from Spotify top/recent tracks + audio features
+// Supports ?mood=Joyful&limit=30&valence=0.7&energy=0.8
+router.get('/recommendations/spotify', getSpotifyRecommendations);
+
+// Direct Spotify playlist mood analysis (no ML dependency)
+router.post('/analyze-direct', analyzePlaylistDirect);
+
+// Mood trends from recently played tracks (no ML history needed)
+router.get('/mood-from-recent', getMoodFromRecentlyPlayed);
 
 export default router;

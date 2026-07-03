@@ -4,6 +4,20 @@ let redisClient;
 let isConnected = false;
 let connectionAttempted = false;
 
+// Global memory cache fallback when Redis is offline
+const memoryCache = new Map();
+
+// Helper to remove expired entries from memory cache
+const cleanMemoryCache = () => {
+  const now = Date.now();
+  for (const [key, item] of memoryCache.entries()) {
+    if (item.expiresAt < now) {
+      memoryCache.delete(key);
+    }
+  }
+};
+
+
 /**
  * Connect to Redis
  */
@@ -104,7 +118,19 @@ export const connectRedis = async () => {
  */
 export const getFromCache = async (key) => {
   if (!redisClient || !isConnected) {
-    return null; // Silently fail
+    cleanMemoryCache();
+    const item = memoryCache.get(key);
+    if (item) {
+      if (item.expiresAt > Date.now()) {
+        if (process.env.NODE_ENV === 'development') {
+          console.log(`📦 Memory Cache HIT: ${key}`);
+        }
+        return item.value;
+      } else {
+        memoryCache.delete(key);
+      }
+    }
+    return null;
   }
 
   try {
@@ -133,7 +159,13 @@ export const getFromCache = async (key) => {
  */
 export const setInCache = async (key, value, expiration = 3600) => {
   if (!redisClient || !isConnected) {
-    return false; // Silently fail
+    cleanMemoryCache();
+    const expiresAt = Date.now() + (expiration * 1000);
+    memoryCache.set(key, { value, expiresAt });
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`💾 Memory Cache SET: ${key} (expires in ${expiration}s)`);
+    }
+    return true;
   }
 
   try {
@@ -159,7 +191,7 @@ export const setInCache = async (key, value, expiration = 3600) => {
  */
 export const deleteFromCache = async (key) => {
   if (!redisClient || !isConnected) {
-    return false;
+    return memoryCache.delete(key);
   }
 
   try {
@@ -181,7 +213,19 @@ export const deleteFromCache = async (key) => {
  */
 export const deletePattern = async (pattern) => {
   if (!redisClient || !isConnected) {
-    return false;
+    let deletedCount = 0;
+    const regexStr = '^' + pattern.replace(/\*/g, '.*') + '$';
+    const regex = new RegExp(regexStr);
+    for (const key of memoryCache.keys()) {
+      if (regex.test(key)) {
+        memoryCache.delete(key);
+        deletedCount++;
+      }
+    }
+    if (process.env.NODE_ENV === 'development' && deletedCount > 0) {
+      console.log(`🗑️ Memory Cache DELETE pattern: ${pattern} (${deletedCount} keys)`);
+    }
+    return true;
   }
 
   try {
@@ -202,6 +246,7 @@ export const deletePattern = async (pattern) => {
     return false;
   }
 };
+
 
 /**
  * Check if Redis is connected

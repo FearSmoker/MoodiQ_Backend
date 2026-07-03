@@ -56,6 +56,11 @@ export const login = (req, res) => {
   console.log('Spotify Redirect URI:', process.env.SPOTIFY_REDIRECT_URI);
   console.log('Frontend URL:', process.env.FRONTEND_URL);
   
+  // Update credentials dynamically before initiating login
+  spotifyApi.setClientId(process.env.SPOTIFY_CLIENT_ID);
+  spotifyApi.setClientSecret(process.env.SPOTIFY_CLIENT_SECRET);
+  spotifyApi.setRedirectURI(process.env.SPOTIFY_REDIRECT_URI);
+
   if (!process.env.SPOTIFY_CLIENT_ID || !process.env.SPOTIFY_CLIENT_SECRET) {
     console.error('❌ Spotify credentials missing!');
     return res.status(500).json({ 
@@ -133,6 +138,11 @@ export const spotifyCallback = async (req, res) => {
     return res.redirect(`${frontendUrl}/?error=no_code&message=${encodeURIComponent('Authorization failed - no code received')}`);
   }
 
+  // Update credentials dynamically before callback code grant
+  spotifyApi.setClientId(process.env.SPOTIFY_CLIENT_ID);
+  spotifyApi.setClientSecret(process.env.SPOTIFY_CLIENT_SECRET);
+  spotifyApi.setRedirectURI(process.env.SPOTIFY_REDIRECT_URI);
+
   try {
     // Step 1: Exchange code for tokens
     console.log('🔄 Step 1: Exchanging authorization code for tokens...');
@@ -161,7 +171,9 @@ export const spotifyCallback = async (req, res) => {
     const userApi = new SpotifyWebApi();
     userApi.setAccessToken(access_token);
     
+
     const me = await userApi.getMe();
+
     
     const spotifyId = me.body.id;
     const email = me.body.email;
@@ -246,6 +258,12 @@ export const spotifyCallback = async (req, res) => {
     // Log detailed error info from Spotify
     if (err.body) {
       console.error('Spotify Error Body:', JSON.stringify(err.body, null, 2));
+    }
+    if (err.response?.text) {
+      console.error('Spotify Response Text:', err.response.text);
+    }
+    if (err.response?.body) {
+      console.error('Spotify Response Body:', JSON.stringify(err.response.body, null, 2));
     }
     
     if (err.statusCode) {

@@ -2,6 +2,7 @@ import SpotifyWebApi from 'spotify-web-api-node';
 import User from '../models/userModel.js';
 import SharedPlaylist from '../models/sharedPlaylistModel.js';
 import * as mlService from '../services/mlService.js';
+import { inferMoodFromFeatures } from './recommendationsController.js';
 
 /**
  * Dashboard Controller - Complete ML Integration v2.0
@@ -15,7 +16,6 @@ import * as mlService from '../services/mlService.js';
  */
 export const getDashboardOverview = async (req, res) => {
   try {
-    console.log('📊 Dashboard: Fetching overview for user:', req.user.displayName);
     const user = req.user;
     
     const spotifyApi = new SpotifyWebApi();
@@ -33,35 +33,58 @@ export const getDashboardOverview = async (req, res) => {
       currentlyPlaying,
       liveSession  // NEW: Check for live session
     ] = await Promise.all([
-      spotifyApi.getUserPlaylists(user.spotifyId, { limit: 50 }),
-      spotifyApi.getMyTopArtists({ limit: 20, time_range: 'medium_term' }),
-      spotifyApi.getMyTopTracks({ limit: 20, time_range: 'medium_term' }),
-      spotifyApi.getMyRecentlyPlayedTracks({ limit: 50 }),
-      spotifyApi.getMySavedTracks({ limit: 1 }),
-      spotifyApi.getMe(),
-      SharedPlaylist.find({ owner: user._id }).sort({ createdAt: -1 }).limit(10),
+      spotifyApi.getUserPlaylists(user.spotifyId, { limit: 50 }).catch(err => {
+        console.warn('⚠️ getUserPlaylists failed:', err.message);
+        return { body: { items: [], total: 0 } };
+      }),
+      spotifyApi.getMyTopArtists({ limit: 20, time_range: 'medium_term' }).catch(err => {
+        console.warn('⚠️ getMyTopArtists failed:', err.message);
+        return { body: { items: [], total: 0 } };
+      }),
+      spotifyApi.getMyTopTracks({ limit: 20, time_range: 'medium_term' }).catch(err => {
+        console.warn('⚠️ getMyTopTracks failed:', err.message);
+        return { body: { items: [], total: 0 } };
+      }),
+      spotifyApi.getMyRecentlyPlayedTracks({ limit: 50 }).catch(err => {
+        console.warn('⚠️ getMyRecentlyPlayedTracks failed:', err.message);
+        return { body: { items: [], total: 0 } };
+      }),
+      spotifyApi.getMySavedTracks({ limit: 1 }).catch(err => {
+        console.warn('⚠️ getMySavedTracks failed:', err.message);
+        return { body: { items: [], total: 0 } };
+      }),
+      spotifyApi.getMe().catch(err => {
+        console.warn('⚠️ getMe failed:', err.message);
+        return { body: { followers: { total: 0 }, product: 'free' } };
+      }),
+      SharedPlaylist.find({ owner: user._id }).sort({ createdAt: -1 }).limit(10).catch(err => {
+        console.warn('⚠️ SharedPlaylist search failed:', err.message);
+        return [];
+      }),
       spotifyApi.getMyCurrentPlayingTrack().catch(() => null),
       mlService.getCurrentLiveSession(user._id.toString()).catch(() => null)  // NEW
     ]);
 
     // Calculate comprehensive statistics
     const stats = {
-      totalPlaylists: userPlaylists.body.total || 0,
-      totalTracks: savedTracks.body.total || 0,
-      totalShares: userShares.length,
-      totalShareViews: userShares.reduce((sum, share) => sum + (share.views || 0), 0),
-      followersCount: userProfile.body.followers?.total || 0,
-      accountType: userProfile.body.product || 'free',
-      totalArtists: new Set(recentlyPlayed.body.items.map(item => item.track.artists[0].id)).size,
-      recentlyPlayedCount: recentlyPlayed.body.items.length,
+      totalPlaylists: userPlaylists?.body?.total || 0,
+      totalTracks: savedTracks?.body?.total || 0,
+      totalShares: userShares?.length || 0,
+      totalShareViews: userShares?.reduce((sum, share) => sum + (share.views || 0), 0) || 0,
+      followersCount: userProfile?.body?.followers?.total || 0,
+      accountType: userProfile?.body?.product || 'free',
+      totalArtists: new Set((recentlyPlayed?.body?.items || []).map(item => item?.track?.artists?.[0]?.id).filter(Boolean)).size,
+      recentlyPlayedCount: recentlyPlayed?.body?.items?.length || 0,
     };
 
     // Genre analysis from top artists
     const genreCount = {};
-    topArtists.body.items.forEach(artist => {
-      artist.genres.forEach(genre => {
-        genreCount[genre] = (genreCount[genre] || 0) + 1;
-      });
+    (topArtists?.body?.items || []).forEach(artist => {
+      if (artist?.genres) {
+        artist.genres.forEach(genre => {
+          genreCount[genre] = (genreCount[genre] || 0) + 1;
+        });
+      }
     });
 
     const topGenres = Object.entries(genreCount)
@@ -70,27 +93,29 @@ export const getDashboardOverview = async (req, res) => {
       .map(([genre, count]) => ({ 
         genre, 
         count,
-        percentage: Math.round((count / topArtists.body.items.length) * 100)
+        percentage: (topArtists?.body?.items?.length || 0) > 0 ? Math.round((count / topArtists.body.items.length) * 100) : 0
       }));
 
     // Recent activity with timestamps
-    const recentActivity = recentlyPlayed.body.items.slice(0, 20).map(item => ({
-      trackId: item.track.id,
-      trackName: item.track.name,
-      artistName: item.track.artists[0].name,
-      artistId: item.track.artists[0].id,
-      playedAt: item.played_at,
-      albumImage: item.track.album.images[0]?.url,
-      albumName: item.track.album.name,
-      duration: item.track.duration_ms,
-      externalUrl: item.track.external_urls.spotify,
+    const recentActivity = (recentlyPlayed?.body?.items || []).slice(0, 20).map(item => ({
+      trackId: item?.track?.id,
+      trackName: item?.track?.name || 'Unknown Track',
+      artistName: item?.track?.artists?.[0]?.name || 'Unknown Artist',
+      artistId: item?.track?.artists?.[0]?.id || null,
+      playedAt: item?.played_at,
+      albumImage: item?.track?.album?.images?.[0]?.url || null,
+      albumName: item?.track?.album?.name || 'Unknown Album',
+      duration: item?.track?.duration_ms || 0,
+      externalUrl: item?.track?.external_urls?.spotify || '',
     }));
 
     // Listening patterns (hourly distribution)
     const hourlyActivity = Array(24).fill(0);
-    recentlyPlayed.body.items.forEach(item => {
-      const hour = new Date(item.played_at).getHours();
-      hourlyActivity[hour]++;
+    (recentlyPlayed?.body?.items || []).forEach(item => {
+      if (item?.played_at) {
+        const hour = new Date(item.played_at).getHours();
+        hourlyActivity[hour]++;
+      }
     });
 
     const peakHour = hourlyActivity.indexOf(Math.max(...hourlyActivity));
@@ -98,8 +123,12 @@ export const getDashboardOverview = async (req, res) => {
     // Currently playing track with ML mood analysis
     let nowPlaying = null;
     if (currentlyPlaying?.body?.item) {
-      console.log('🎵 Analyzing currently playing track with ML...');
-      
+      // `progress_ms` from Spotify is already the live current position;
+      // it does not need any elapsed-time correction added on top (that
+      // was double-counting and made the reported position drift ahead
+      // of real playback the longer it had been since the last seek).
+      const progress = currentlyPlaying.body.progress_ms || 0;
+
       try {
         // Get ML mood analysis for currently playing track
         const moodAnalysis = await mlService.analyzeCurrentlyPlaying(
@@ -110,47 +139,62 @@ export const getDashboardOverview = async (req, res) => {
         nowPlaying = {
           isPlaying: currentlyPlaying.body.is_playing,
           trackId: currentlyPlaying.body.item.id,
-          trackName: currentlyPlaying.body.item.name,
-          artists: currentlyPlaying.body.item.artists.map(a => ({ id: a.id, name: a.name })),
-          albumName: currentlyPlaying.body.item.album.name,
-          albumImage: currentlyPlaying.body.item.album.images[0]?.url,
-          duration: currentlyPlaying.body.item.duration_ms,
-          progress: currentlyPlaying.body.progress_ms,
-          externalUrl: currentlyPlaying.body.item.external_urls.spotify,
+          trackName: currentlyPlaying.body.item.name || 'Unknown Track',
+          artists: currentlyPlaying.body.item.artists?.map(a => ({ id: a.id, name: a.name })) || [],
+          albumName: currentlyPlaying.body.item.album?.name || 'Unknown Album',
+          albumImage: currentlyPlaying.body.item.album?.images?.[0]?.url || null,
+          duration: currentlyPlaying.body.item.duration_ms || 0,
+          progress: progress,
+          externalUrl: currentlyPlaying.body.item.external_urls?.spotify || '',
           device: {
             name: currentlyPlaying.body.device?.name,
             type: currentlyPlaying.body.device?.type,
           },
           // ML mood analysis
           mood: {
-            fused_mood: moodAnalysis.mood_analysis?.fused_mood || 'Unknown',
-            confidence: moodAnalysis.mood_analysis?.confidence || 0,
-            audio_mood: moodAnalysis.mood_analysis?.audio_mood || 'Unknown',
-            lyrics_mood: moodAnalysis.mood_analysis?.lyrics_mood || 'Neutral',
-            scores: moodAnalysis.mood_analysis?.scores || {}
+            fused_mood: moodAnalysis?.mood_analysis?.fused_mood || 'Unknown',
+            confidence: moodAnalysis?.mood_analysis?.confidence || 0,
+            audio_mood: moodAnalysis?.mood_analysis?.audio_mood || 'Unknown',
+            lyrics_mood: moodAnalysis?.mood_analysis?.lyrics_mood || 'Neutral',
+            scores: moodAnalysis?.mood_analysis?.scores || {}
           }
         };
 
-        console.log(`✅ Currently playing mood: ${nowPlaying.mood.fused_mood}`);
       } catch (mlError) {
         console.warn('⚠️ ML mood analysis unavailable for now playing:', mlError.message);
         
-        // Fallback: basic info without mood
+        // Fallback: direct Spotify audio features + local rule engine
+        let inferredMood = 'Unknown';
+        try {
+          const featResponse = await spotifyApi.getAudioFeaturesForTracks([currentlyPlaying.body.item.id]);
+          const features = featResponse.body.audio_features?.[0] || null;
+          if (features) {
+            inferredMood = inferMoodFromFeatures(features);
+          }
+        } catch (featErr) {
+          console.warn('⚠️ Fallback audio features failed in overview:', featErr.message);
+        }
+
+        // Fallback: basic info with local rule-based mood
         nowPlaying = {
           isPlaying: currentlyPlaying.body.is_playing,
           trackId: currentlyPlaying.body.item.id,
-          trackName: currentlyPlaying.body.item.name,
-          artists: currentlyPlaying.body.item.artists.map(a => ({ id: a.id, name: a.name })),
-          albumName: currentlyPlaying.body.item.album.name,
-          albumImage: currentlyPlaying.body.item.album.images[0]?.url,
-          duration: currentlyPlaying.body.item.duration_ms,
-          progress: currentlyPlaying.body.progress_ms,
-          externalUrl: currentlyPlaying.body.item.external_urls.spotify,
-          device: {
-            name: currentlyPlaying.body.device?.name,
-            type: currentlyPlaying.body.device?.type,
-          },
-          mood: null
+          trackName: currentlyPlaying.body.item.name || 'Unknown Track',
+          artists: currentlyPlaying.body.item.artists?.map(a => ({ id: a.id, name: a.name })) || [],
+          albumName: currentlyPlaying.body.item.album?.name || 'Unknown Album',
+          albumImage: currentlyPlaying.body.item.album?.images?.[0]?.url || null,
+          duration: currentlyPlaying.body.item.duration_ms || 0,
+          progress: progress,
+          externalUrl: currentlyPlaying.body.item.external_urls?.spotify || '',
+          device: currentlyPlaying.body.device || null,
+          mood: inferredMood !== 'Unknown' ? {
+            fused_mood: inferredMood,
+            confidence: null,
+            audio_mood: inferredMood,
+            lyrics_mood: null,
+            scores: { [inferredMood]: null },
+            source: 'rule_based_fallback'
+          } : null
         };
       }
     }
@@ -159,7 +203,6 @@ export const getDashboardOverview = async (req, res) => {
     let mlStats = null;
     try {
       mlStats = await mlService.getUserLearningStats(user._id.toString());
-      console.log(`📊 ML Stats: ${mlStats.feedback_count} feedbacks, personalization: ${mlStats.personalization_level}`);
     } catch (mlError) {
       console.warn('⚠️ ML stats unavailable:', mlError.message);
     }
@@ -216,13 +259,13 @@ export const getDashboardOverview = async (req, res) => {
         name: track.name,
         artists: track.artists.map(a => ({ id: a.id, name: a.name })),
         album: {
-          name: track.album.name,
-          images: track.album.images,
+          name: track.album?.name || '',
+          images: track.album?.images || [],
         },
         duration: track.duration_ms,
         popularity: track.popularity,
         previewUrl: track.preview_url,
-        externalUrl: track.external_urls.spotify,
+        externalUrl: track.external_urls?.spotify || track.external_urls || '',
       })),
       recentActivity,
       topGenres,
@@ -254,7 +297,6 @@ export const getDashboardOverview = async (req, res) => {
       } : null
     };
 
-    console.log('✅ Dashboard: Overview data compiled successfully');
     res.json(dashboardData);
 
   } catch (error) {
@@ -284,7 +326,6 @@ export const getListeningStats = async (req, res) => {
     const user = req.user;
     const { timeRange = 'medium_term' } = req.query;
 
-    console.log(`📊 Listening Stats: Fetching for ${timeRange}`);
 
     const spotifyApi = new SpotifyWebApi();
     spotifyApi.setAccessToken(user.accessToken);
@@ -295,27 +336,31 @@ export const getListeningStats = async (req, res) => {
       spotifyApi.getMyRecentlyPlayedTracks({ limit: 50 }),
     ]);
 
+    const tracksCount = topTracks.body.items.length;
+    
     // Calculate listening patterns
     const listeningPatterns = {
-      totalTracksPlayed: recentlyPlayed.body.items.length,
-      uniqueArtists: new Set(recentlyPlayed.body.items.map(item => item.track.artists[0].id)).size,
-      uniqueTracks: new Set(recentlyPlayed.body.items.map(item => item.track.id)).size,
-      averageTrackDuration: Math.round(
-        topTracks.body.items.reduce((sum, track) => sum + track.duration_ms, 0) / 
-        topTracks.body.items.length / 1000
-      ),
-      averagePopularity: Math.round(
-        topTracks.body.items.reduce((sum, track) => sum + track.popularity, 0) / 
-        topTracks.body.items.length
-      ),
+      totalTracksPlayed: recentlyPlayed?.body?.items?.length || 0,
+      uniqueArtists: new Set((recentlyPlayed?.body?.items || []).map(item => item?.track?.artists?.[0]?.id).filter(Boolean)).size,
+      uniqueTracks: new Set((recentlyPlayed?.body?.items || []).map(item => item?.track?.id).filter(Boolean)).size,
+      averageTrackDuration: tracksCount > 0 ? Math.round(
+        (topTracks?.body?.items || []).reduce((sum, track) => sum + (track?.duration_ms || 0), 0) / 
+        tracksCount / 1000
+      ) : 0,
+      averagePopularity: tracksCount > 0 ? Math.round(
+        (topTracks?.body?.items || []).reduce((sum, track) => sum + (track?.popularity || 0), 0) / 
+        tracksCount
+      ) : 0,
     };
 
     // Genre distribution
     const genreCount = {};
-    topArtists.body.items.forEach(artist => {
-      artist.genres.forEach(genre => {
-        genreCount[genre] = (genreCount[genre] || 0) + 1;
-      });
+    (topArtists?.body?.items || []).forEach(artist => {
+      if (artist?.genres) {
+        artist.genres.forEach(genre => {
+          genreCount[genre] = (genreCount[genre] || 0) + 1;
+        });
+      }
     });
 
     const genreDistribution = Object.entries(genreCount)
@@ -324,22 +369,23 @@ export const getListeningStats = async (req, res) => {
       .map(([genre, count]) => ({ 
         genre, 
         count, 
-        percentage: Math.round((count / topArtists.body.items.length) * 100) 
+        percentage: (topArtists?.body?.items?.length || 0) > 0 ? Math.round((count / topArtists.body.items.length) * 100) : 0 
       }));
 
     // Listening time distribution (by hour and day)
     const hourDistribution = Array(24).fill(0);
     const dayDistribution = Array(7).fill(0);
     
-    recentlyPlayed.body.items.forEach(item => {
-      const date = new Date(item.played_at);
-      const hour = date.getHours();
-      const day = date.getDay();
-      hourDistribution[hour]++;
-      dayDistribution[day]++;
+    (recentlyPlayed?.body?.items || []).forEach(item => {
+      if (item?.played_at) {
+        const date = new Date(item.played_at);
+        const hour = date.getHours();
+        const day = date.getDay();
+        hourDistribution[hour]++;
+        dayDistribution[day]++;
+      }
     });
 
-    console.log('✅ Listening stats compiled successfully');
 
     res.json({
       timeRange,
@@ -358,22 +404,22 @@ export const getListeningStats = async (req, res) => {
         day: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][day],
         count
       })),
-      topTracks: topTracks.body.items.slice(0, 20).map((track, index) => ({
+      topTracks: (topTracks?.body?.items || []).slice(0, 20).map((track, index) => ({
         rank: index + 1,
-        id: track.id,
-        name: track.name,
-        artists: track.artists.map(a => a.name),
-        album: track.album.name,
-        popularity: track.popularity,
-        duration: track.duration_ms,
+        id: track?.id,
+        name: track?.name || 'Unknown Track',
+        artists: track?.artists?.map(a => a.name) || [],
+        album: track?.album?.name || 'Unknown Album',
+        popularity: track?.popularity || 0,
+        duration: track?.duration_ms || 0,
       })),
-      topArtists: topArtists.body.items.slice(0, 20).map((artist, index) => ({
+      topArtists: (topArtists?.body?.items || []).slice(0, 20).map((artist, index) => ({
         rank: index + 1,
-        id: artist.id,
-        name: artist.name,
-        genres: artist.genres,
-        popularity: artist.popularity,
-        followers: artist.followers?.total || 0,
+        id: artist?.id,
+        name: artist?.name || 'Unknown Artist',
+        genres: artist?.genres || [],
+        popularity: artist?.popularity || 0,
+        followers: artist?.followers?.total || 0,
       })),
     });
 
@@ -403,13 +449,75 @@ export const getNowPlaying = async (req, res) => {
   try {
     const user = req.user;
 
-    console.log(`🎵 Fetching now playing with ML analysis for: ${user.displayName}`);
 
-    // Use ML service's currently playing analysis (HYBRID)
-    const nowPlayingAnalysis = await mlService.analyzeCurrentlyPlaying(
-      user.accessToken,
-      user._id.toString()
-    );
+    const spotifyApi = new SpotifyWebApi();
+    spotifyApi.setAccessToken(user.accessToken);
+
+    let nowPlayingAnalysis;
+    let fallbackUsed = false;
+
+    try {
+      // Use ML service's currently playing analysis (HYBRID)
+      nowPlayingAnalysis = await mlService.analyzeCurrentlyPlaying(
+        user.accessToken,
+        user._id.toString()
+      );
+    } catch (mlError) {
+      console.warn('⚠️ ML service analyzeCurrentlyPlaying failed, trying Spotify direct fallback:', mlError.message);
+      
+      const currentlyPlaying = await spotifyApi.getMyCurrentPlayingTrack().catch(() => null);
+      if (!currentlyPlaying || !currentlyPlaying.body || !currentlyPlaying.body.item) {
+        return res.json({
+          isPlaying: false,
+          message: 'No track currently playing',
+        });
+      }
+      
+      const item = currentlyPlaying.body.item;
+      const trackId = item.id;
+      
+      // Get audio features
+      let features = null;
+      try {
+        const featResponse = await spotifyApi.getAudioFeaturesForTracks([trackId]);
+        features = featResponse.body.audio_features?.[0] || null;
+      } catch (featErr) {
+        console.warn('⚠️ Failed to get audio features for fallback:', featErr.message);
+      }
+      
+      // Infer mood
+      const inferredMood = features ? inferMoodFromFeatures(features) : 'Unknown';
+      
+      nowPlayingAnalysis = {
+        is_playing: currentlyPlaying.body.is_playing,
+        track: {
+          id: item.id,
+          name: item.name,
+          artists: item.artists.map(a => ({ id: a.id, name: a.name })),
+          album: {
+            name: item.album.name || item.album,
+            images: item.album?.images || []
+          },
+          duration_ms: item.duration_ms,
+          external_url: item.external_urls?.spotify || '',
+          popularity: item.popularity || 50,
+          images: item.album?.images || []
+        },
+        // progress_ms from Spotify is already the live current position —
+        // no elapsed-time correction needed (see note in getDashboardOverview).
+        progress_ms: currentlyPlaying.body.progress_ms || 0,
+        device: currentlyPlaying.body.device || null,
+        mood_analysis: inferredMood !== 'Unknown' ? {
+          fused_mood: inferredMood,
+          confidence: null,
+          audio_mood: inferredMood,
+          lyrics_mood: null,
+          scores: { [inferredMood]: null },
+          source: 'rule_based_fallback'
+        } : null
+      };
+      fallbackUsed = true;
+    }
 
     if (!nowPlayingAnalysis.is_playing) {
       return res.json({
@@ -418,7 +526,6 @@ export const getNowPlaying = async (req, res) => {
       });
     }
 
-    console.log(`✅ Now playing: ${nowPlayingAnalysis.track.name} - Mood: ${nowPlayingAnalysis.mood_analysis?.fused_mood}`);
     
     res.json({
       isPlaying: nowPlayingAnalysis.is_playing,
@@ -432,7 +539,7 @@ export const getNowPlaying = async (req, res) => {
         },
         duration: nowPlayingAnalysis.track.duration_ms,
         progress: nowPlayingAnalysis.progress_ms,
-        progressPercentage: Math.round((nowPlayingAnalysis.progress_ms / nowPlayingAnalysis.track.duration_ms) * 100),
+        progressPercentage: nowPlayingAnalysis.track.duration_ms > 0 ? Math.round((nowPlayingAnalysis.progress_ms / nowPlayingAnalysis.track.duration_ms) * 100) : 0,
         externalUrl: nowPlayingAnalysis.track.external_url,
         popularity: nowPlayingAnalysis.track.popularity,
       },
@@ -458,13 +565,6 @@ export const getNowPlaying = async (req, res) => {
       });
     }
 
-    if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
-      return res.json({
-        isPlaying: false,
-        message: 'ML service temporarily unavailable',
-      });
-    }
-
     res.json({
       isPlaying: false,
       message: 'Unable to fetch currently playing track',
@@ -482,7 +582,6 @@ export const getDashboardRecommendations = async (req, res) => {
     const user = req.user;
     const { limit = 20 } = req.query;
 
-    console.log(`🎯 Fetching personalized recommendations with ML`);
 
     // Use ML service for personalized recommendations
     const recommendations = await mlService.generatePersonalizedPlaylist(
@@ -491,7 +590,6 @@ export const getDashboardRecommendations = async (req, res) => {
       parseInt(limit)
     );
 
-    console.log(`✅ Generated ${recommendations.tracks?.length || 0} personalized recommendations`);
 
     res.json({
       recommendations: recommendations.tracks || [],

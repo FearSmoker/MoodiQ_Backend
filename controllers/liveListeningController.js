@@ -14,11 +14,9 @@ export const startLiveSession = async (req, res) => {
   try {
     const user = req.user;
 
-    console.log(`🎧 Starting live session for user: ${user.displayName}`);
 
     const sessionData = await mlService.startLiveSession(user._id.toString());
 
-    console.log(`✅ Session started: ${sessionData.session_id}`);
 
     res.json(sessionData);
 
@@ -47,7 +45,6 @@ export const addTrackToSession = async (req, res) => {
       });
     }
 
-    console.log(`➕ Adding track to session: ${trackName}`);
 
     const sessionData = await mlService.addTrackToLiveSession(
       user._id.toString(),
@@ -59,7 +56,6 @@ export const addTrackToSession = async (req, res) => {
       }
     );
 
-    console.log(`✅ Track added: ${sessionData.track_count} tracks total`);
 
     res.json(sessionData);
 
@@ -112,14 +108,12 @@ export const endSession = async (req, res) => {
       });
     }
 
-    console.log(`🛑 Ending session: ${sessionId}`);
 
     const finalAnalytics = await mlService.endLiveSession(
       user._id.toString(),
       sessionId
     );
 
-    console.log(`✅ Session ended and saved to database`);
 
     res.json(finalAnalytics);
 
