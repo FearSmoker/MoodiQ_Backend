@@ -7,6 +7,8 @@ import {
   optimizePlaylistFlow, 
   detectMoodGaps,
   fillMoodGaps,
+  fillGapsWithSpotify,
+  optimizeAndEnrichFlow,
   generateMoodPlaylist,
   generateActivityPlaylist,
   generateFromTopTracks,
@@ -63,6 +65,12 @@ router.post('/gaps', detectMoodGaps);
 
 // Fill mood gaps with recommendations
 router.post('/fill-gaps', fillMoodGaps);
+
+// Fill mood gaps with targeted Spotify catalog bridging tracks (per-gap, returns augmentedTracks)
+router.post('/fill-gaps-smart', fillGapsWithSpotify);
+
+// AI-powered optimization: picks existing tracks that fit the arc + fills from Spotify catalog
+router.post('/optimize-enrich', optimizeAndEnrichFlow);
 
 // ===============================================
 // Playlist Generation (HYBRID SPOTIFY INTEGRATION)

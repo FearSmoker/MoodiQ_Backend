@@ -137,7 +137,7 @@ function pickMoodFromValenceEnergy(valence, energy) {
  * "Get Recommendations" refresh button) surface different parts of the
  * catalog instead of the same fixed top results every time.
  */
-async function searchCatalogForMood(spotifyApi, moodKey, count, excludeIds) {
+export async function searchCatalogForMood(spotifyApi, moodKey, count, excludeIds) {
   const genres = moodKey
     ? (MOOD_GENRE_SEEDS[moodKey] || [moodKey.toLowerCase()])
     : sample(ANY_MOOD_GENRES, 3);

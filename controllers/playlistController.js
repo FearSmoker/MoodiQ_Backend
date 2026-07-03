@@ -3,7 +3,13 @@ import * as mlService from '../services/mlService.js';
 import { getFromCache, setInCache } from '../services/cacheService.js';
 import { broadcastUpdate } from '../services/socketService.js';
 import { CACHE_TTL } from '../utils/constants.js';
-import { analyzePlaylistDirect } from './recommendationsController.js';
+import { 
+  analyzePlaylistDirect, 
+  searchCatalogForMood, 
+  getAudioFeaturesForTracks, 
+  MOOD_FEATURE_MAP, 
+  inferMoodFromFeatures 
+} from './recommendationsController.js';
 
 const getSpotifyApi = (accessToken) => {
   const spotifyApi = new SpotifyWebApi();
@@ -61,30 +67,60 @@ const resolveMoodProfile = (moodValue) => {
 
 /**
  * Reconciles two known track shapes into the one FlowOptimizer.jsx actually
- * reads (`track.mood` as a string, `track.features.{valence,energy,...}`):
+ * reads (`track.mood` as a string, `track.features.{valence,energy,...}`,
+ * `track.artists` as an array, `track.album.images` as an array):
  *
- *  - ML hybrid path (mlService.analyzeSpotifyPlaylist -> Python
+ *  - ML hybrid path (mlService.analyzeSpotifyPlaylist → Python
  *    /predict/spotify/playlist): tracks come back as
- *    { moodDetails: { primary_mood, scores: {valence, energy, ...} }, ... }
+ *    { id, artist: "Name", album: "Title", images: [...],
+ *      moodDetails: { primary_mood, scores: {valence, energy, ...} }, ... }
  *  - Direct fallback path (recommendationsController.analyzePlaylistDirect):
- *    tracks come back as { mood: "Chill", features: {valence, energy, ...} }
+ *    tracks come back as
+ *    { id, artists: [{name}], album: {images:[]}, mood: "Chill",
+ *      features: {valence, energy, ...} }
  *
- * Without this, FlowOptimizer silently shows "Unknown" mood tags and no
- * energy/valence badges whenever the ML hybrid path succeeds (the common
- * case), since it never reads `.moodDetails`.
+ * Without full normalization FlowOptimizer silently shows "Unknown Artist" and
+ * no cover art for every track coming via the ML hybrid path.
  */
 const normalizeTrackForFlow = (track) => {
   if (!track) return track;
 
-  const features = track.features || track.moodDetails?.scores || null;
-
+  // ── mood ─────────────────────────────────────────────────────────────────
   const mood =
     typeof track.mood === 'string'
       ? track.mood
       : track.moodDetails?.primary_mood || track.mood?.primary_mood || 'Unknown';
 
-  return { ...track, mood, features };
+  // ── audio features ────────────────────────────────────────────────────────
+  const features = track.features || track.moodDetails?.scores || null;
+
+  // ── artists array  ────────────────────────────────────────────────────────
+  // ML hybrid path returns { artist: "Name" }; direct path returns
+  // { artists: [{name: "Name"}, ...] }. Normalise to the latter.
+  let artists = track.artists;
+  if (!Array.isArray(artists) || artists.length === 0) {
+    const artistName = track.artist || 'Unknown Artist';
+    artists = [{ name: artistName }];
+  }
+
+  // ── album / cover art ─────────────────────────────────────────────────────
+  // ML hybrid path returns { album: "Album Title", images: [{url, ...}] }.
+  // Direct path returns { album: { name, images: [...] } }.
+  // Normalise to { album: { name: string, images: [...] } }.
+  let album = track.album;
+  if (typeof album === 'string' || !album) {
+    // ML path: album is the album name string; images are at top level
+    album = {
+      name: typeof album === 'string' ? album : '',
+      images: Array.isArray(track.images) ? track.images : [],
+    };
+  } else if (album && !Array.isArray(album.images)) {
+    album = { ...album, images: [] };
+  }
+
+  return { ...track, mood, features, artists, album };
 };
+
 
 /**
  * @desc    Get user's playlists
@@ -375,7 +411,11 @@ export const optimizePlaylistFlow = async (req, res) => {
  * @access  Protected
  */
 export const detectMoodGaps = async (req, res) => {
-  const { tracks, threshold = 1.5 } = req.body;
+  // NOTE: threshold is euclidean distance in 2D valence/energy space.
+  // Max possible distance is √((1-0)²+(1-0)²) = √2 ≈ 1.414.
+  // The old default of 1.5 was impossible — no gap was ever detected.
+  // 0.3 means a meaningful discontinuity (≈21% of the full range on both axes).
+  const { tracks, threshold = 0.3 } = req.body;
 
   if (!tracks || !Array.isArray(tracks) || tracks.length === 0) {
     return res.status(400).json({ message: 'Tracks array is required' });
@@ -483,10 +523,309 @@ export const fillMoodGaps = async (req, res) => {
 };
 
 /**
+ * @desc    Fill mood gaps with TARGETED Spotify catalog tracks for each gap
+ * @route   POST /api/playlists/fill-gaps-smart
+ * @access  Protected
+ *
+ * Preserves the original mood trajectory (start→end of the original playlist).
+ * Detects abrupt transitions, inserts one bridge track per gap from the Spotify
+ * catalog, and returns BOTH the augmented track list AND per-gap metadata.
+ */
+export const fillGapsWithSpotify = async (req, res) => {
+  const { tracks, threshold = 0.3 } = req.body;
+
+  if (!tracks || !Array.isArray(tracks) || tracks.length < 2) {
+    return res.status(400).json({ message: 'At least 2 tracks are required' });
+  }
+
+  try {
+    const spotifyApi = getSpotifyApi(req.user.accessToken);
+
+    // ── Detect gaps ──────────────────────────────────────────────────────────
+    const gaps = [];
+    for (let i = 0; i < tracks.length - 1; i++) {
+      const f1 = tracks[i].features     || tracks[i].moodDetails?.scores;
+      const f2 = tracks[i + 1].features || tracks[i + 1].moodDetails?.scores;
+      if (!f1 || !f2) continue;
+      const v1 = f1.valence ?? 0.5, e1 = f1.energy ?? 0.5;
+      const v2 = f2.valence ?? 0.5, e2 = f2.energy ?? 0.5;
+      const distance = Math.sqrt((v1 - v2) ** 2 + (e1 - e2) ** 2);
+      if (distance > threshold) {
+        gaps.push({
+          position: i,
+          from_track: tracks[i].name,
+          to_track: tracks[i + 1].name,
+          distance,
+          severity: distance > 0.6 ? 'high' : distance > 0.4 ? 'medium' : 'low',
+          bridge: { valence: (v1 + v2) / 2, energy: (e1 + e2) / 2 },
+        });
+      }
+    }
+
+    if (gaps.length === 0) {
+      return res.json({
+        augmentedTracks: tracks,
+        gapFills: [],
+        total_gaps: 0,
+        addedCount: 0,
+        message: 'No significant mood gaps — playlist already flows smoothly!',
+      });
+    }
+
+    // ── Find bridge tracks for each gap ──────────────────────────────────────
+    const existingIds = new Set(tracks.map(t => t.id).filter(Boolean));
+    const gapFills = [];
+
+    for (const gap of gaps) {
+      const moodCentroids = Object.entries(MOOD_FEATURE_MAP).map(([name, r]) => ({
+        name,
+        v: (r.valence[0] + r.valence[1]) / 2,
+        e: (r.energy[0] + r.energy[1]) / 2,
+      }));
+      const bridgeMood = moodCentroids.reduce((best, m) => {
+        const d = Math.sqrt((m.v - gap.bridge.valence) ** 2 + (m.e - gap.bridge.energy) ** 2);
+        return d < best.dist ? { name: m.name, dist: d } : best;
+      }, { name: 'Chill', dist: Infinity }).name;
+
+      let chosenBridge = null;
+      try {
+        const raw = await searchCatalogForMood(spotifyApi, bridgeMood, 10, existingIds);
+        const ids = raw.map(t => t.id);
+        const featMap = ids.length ? await getAudioFeaturesForTracks(spotifyApi, ids).catch(() => ({})) : {};
+
+        let bestDist = Infinity;
+        for (const c of raw) {
+          if (existingIds.has(c.id)) continue;
+          const f = featMap[c.id];
+          if (!f) continue;
+          const d = Math.sqrt(
+            (f.valence - gap.bridge.valence) ** 2 + (f.energy - gap.bridge.energy) ** 2
+          );
+          if (d < bestDist) {
+            bestDist = d;
+            chosenBridge = { 
+              ...c, 
+              features: f, 
+              mood: inferMoodFromFeatures(f), 
+              isNew: true, 
+              isBridge: true 
+            };
+          }
+        }
+        if (chosenBridge) existingIds.add(chosenBridge.id);
+      } catch (e) {
+        console.warn(`⚠️ Bridge search for gap at pos ${gap.position}:`, e.message);
+      }
+
+      gapFills.push({
+        position: gap.position,
+        from_track: gap.from_track,
+        to_track: gap.to_track,
+        distance: gap.distance,
+        severity: gap.severity,
+        bridge_mood: bridgeMood,
+        bridge_track: chosenBridge,   // single best track (or null)
+      });
+    }
+
+    // ── Build augmented list (insert bridges in reverse index order) ──────────
+    let augmented = [...tracks];
+    [...gapFills]
+      .sort((a, b) => b.position - a.position)  // reverse so splice indices stay valid
+      .forEach(fill => {
+        if (fill.bridge_track) augmented.splice(fill.position + 1, 0, fill.bridge_track);
+      });
+
+    const addedCount = gapFills.filter(f => f.bridge_track).length;
+    console.log(`✅ fillGapsWithSpotify: ${gaps.length} gaps, ${addedCount} bridges added`);
+
+    res.json({
+      augmentedTracks: augmented,
+      gapFills,
+      total_gaps: gaps.length,
+      addedCount,
+      message: `Added ${addedCount} bridge track(s) to smooth ${gaps.length} abrupt transition(s)`,
+    });
+
+  } catch (err) {
+    console.error('❌ fillGapsWithSpotify error:', err.message);
+    res.status(500).json({ message: 'Failed to find bridge tracks', error: err.message });
+  }
+};
+
+/**
+ * @desc    Optimize playlist by building a smooth mood arc from startMood → endMood
+ * @route   POST /api/playlists/optimize-enrich
+ * @access  Protected
+ *
+ * Algorithm:
+ *  1. Generate N equally-spaced waypoints along the startMood → endMood arc.
+ *  2. Greedily assign existing tracks (that have audio features) to the nearest waypoint.
+ *  3. If < 30% of waypoints are covered by existing tracks → generate a FRESH playlist
+ *     from the Spotify catalog across the full arc ("mode: generated").
+ *  4. Otherwise, fill remaining waypoints with Spotify catalog bridge tracks ("mode: enriched").
+ *  5. Sort by arc projection and return.
+ */
+export const optimizeAndEnrichFlow = async (req, res) => {
+  const { tracks, startMood, endMood } = req.body;
+
+  if (!tracks?.length) return res.status(400).json({ message: 'Tracks are required' });
+  if (!startMood || !endMood) return res.status(400).json({ message: 'Start and end mood are required' });
+  if (startMood.toLowerCase() === endMood.toLowerCase()) {
+    return res.status(400).json({ message: 'Start and end mood must be different' });
+  }
+
+  try {
+    const spotifyApi = getSpotifyApi(req.user.accessToken);
+    const sP = resolveMoodProfile(startMood);
+    const eP = resolveMoodProfile(endMood);
+
+    if (!sP || !eP) {
+      return res.status(400).json({ message: `Unknown mood: ${!sP ? startMood : endMood}` });
+    }
+
+    // Target playlist length — keep original count, min 10, max 30
+    const targetCount = Math.min(30, Math.max(tracks.length, 10));
+
+    // ── Generate N waypoints along the arc ───────────────────────────────────
+    const waypoints = Array.from({ length: targetCount }, (_, i) => {
+      const t = i / Math.max(targetCount - 1, 1);
+      return {
+        index: i, t,
+        valence: sP.valence + t * (eP.valence - sP.valence),
+        energy:  sP.energy  + t * (eP.energy  - sP.energy),
+      };
+    });
+
+    // ── Match existing tracks to waypoints ───────────────────────────────────
+    const withFeatures = tracks.filter(t => t.features?.valence != null);
+    const THRESHOLD = 0.4;
+    const usedIds = new Set();
+    const assigned = [];   // { track, waypointIndex }
+    const bridges  = [];   // waypoints with no existing match
+
+    for (const wp of waypoints) {
+      let best = null, bestDist = THRESHOLD;
+      for (const t of withFeatures) {
+        if (usedIds.has(t.id)) continue;
+        const d = Math.sqrt(
+          (t.features.valence - wp.valence) ** 2 + (t.features.energy - wp.energy) ** 2
+        );
+        if (d < bestDist) { bestDist = d; best = t; }
+      }
+      if (best) {
+        usedIds.add(best.id);
+        assigned.push({ track: { ...best, isNew: false }, waypointIndex: wp.index });
+      } else {
+        bridges.push(wp);
+      }
+    }
+
+    const matchRatio = assigned.length / targetCount;
+    const mode = matchRatio < 0.3 ? 'generated' : 'enriched';
+    console.log(`🎯 optimizeAndEnrichFlow: matchRatio=${(matchRatio*100).toFixed(0)}%, mode=${mode}`);
+
+    const seenIds = new Set(tracks.map(t => t.id).filter(Boolean));
+    let finalTracks = [];
+    let addedCount = 0;
+
+    if (mode === 'generated') {
+      // ── No enough existing tracks fit the arc → generate fresh ──────────────
+      // Divide arc into segments, search Spotify for each segment
+      const segCount = Math.max(2, Math.ceil(targetCount / 5));
+      const tracksPerSeg = Math.ceil(targetCount / segCount);
+
+      for (let s = 0; s < segCount; s++) {
+        const t = s / Math.max(segCount - 1, 1);
+        const seg = {
+          valence: sP.valence + t * (eP.valence - sP.valence),
+          energy:  sP.energy  + t * (eP.energy  - sP.energy),
+        };
+        const moodName = pickClosestMoodName(seg);
+        const raw = await searchCatalogForMood(spotifyApi, moodName, tracksPerSeg * 3, seenIds).catch(() => []);
+        const ids = raw.map(r => r.id);
+        const featMap = ids.length ? await getAudioFeaturesForTracks(spotifyApi, ids).catch(() => ({})) : {};
+
+        const scored = raw
+          .filter(r => !seenIds.has(r.id))
+          .map(r => {
+            const f = featMap[r.id];
+            const v = f?.valence ?? seg.valence, e = f?.energy ?? seg.energy;
+            return { ...r, features: f || null, mood: f ? inferMoodFromFeatures(f) : moodName, isNew: true,
+              _d: Math.sqrt((v - seg.valence)**2 + (e - seg.energy)**2) };
+          })
+          .sort((a, b) => a._d - b._d)
+          .slice(0, tracksPerSeg)
+          .map(({ _d, ...t }) => t);
+
+        scored.forEach(t => { seenIds.add(t.id); finalTracks.push(t); });
+        addedCount += scored.length;
+      }
+
+      finalTracks = sortByMoodArc(finalTracks, sP, eP);
+
+    } else {
+      // ── Enrich: fill bridge waypoints from Spotify catalog ──────────────────
+      for (const bridge of bridges) {
+        const moodName = pickClosestMoodName(bridge);
+        const raw = await searchCatalogForMood(spotifyApi, moodName, 10, seenIds).catch(() => []);
+        const ids = raw.map(r => r.id);
+        const featMap = ids.length ? await getAudioFeaturesForTracks(spotifyApi, ids).catch(() => ({})) : {};
+
+        let best = null, bestDist = Infinity;
+        for (const c of raw) {
+          if (seenIds.has(c.id)) continue;
+          const f = featMap[c.id];
+          if (!f) continue;
+          const d = Math.sqrt((f.valence - bridge.valence)**2 + (f.energy - bridge.energy)**2);
+          if (d < bestDist) {
+            bestDist = d;
+            best = { ...c, features: f, mood: inferMoodFromFeatures(f), isNew: true };
+          }
+        }
+        if (best) {
+          seenIds.add(best.id);
+          assigned.push({ track: best, waypointIndex: bridge.index });
+          addedCount++;
+        }
+      }
+
+      assigned.sort((a, b) => a.waypointIndex - b.waypointIndex);
+      finalTracks = assigned.map(a => a.track);
+    }
+
+    // ── Fallback: if Spotify search returned nothing, return original sorted ──
+    if (!finalTracks.length) {
+      finalTracks = sortByMoodArc(tracks, sP, eP).map(t => ({ ...t, isNew: false }));
+    }
+
+    const flowScore = calcFlowScore(finalTracks, sP, eP);
+    console.log(`✅ optimizeAndEnrichFlow: ${finalTracks.length} tracks (${addedCount} new), score=${flowScore.toFixed(2)}`);
+
+    res.json({
+      optimizedTracks: finalTracks,
+      addedCount,
+      keptCount: finalTracks.length - addedCount,
+      flowScore,
+      mode,
+      message: mode === 'generated'
+        ? `Generated fresh ${startMood}→${endMood} playlist: ${finalTracks.length} tracks from Spotify catalog`
+        : `Enriched playlist: kept ${finalTracks.length - addedCount} existing + added ${addedCount} bridge tracks`,
+    });
+
+  } catch (err) {
+    console.error('❌ optimizeAndEnrichFlow error:', err.message, err.stack?.split('\n')[1]);
+    res.status(500).json({ message: 'Failed to optimize playlist flow', error: err.message });
+  }
+};
+
+
+/**
  * @desc    Generate mood-based playlist (HYBRID)
  * @route   POST /api/playlists/generate/mood
  * @access  Protected
  */
+
 export const generateMoodPlaylist = async (req, res) => {
   const { targetMood, limit = 20, seedTrackId } = req.body;
 
