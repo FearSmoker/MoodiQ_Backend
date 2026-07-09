@@ -12,7 +12,7 @@ import transferRoutes from './routes/transferRoutes.js';
 import userRoutes from './routes/userRoutes.js';
 import dashboardRoutes from './routes/dashboardRoutes.js';
 import analyticsRoutes from './routes/analyticsRoutes.js';
-import liveListeningRoutes from './routes/LiveListeningRoutes.js';
+import liveListeningRoutes from './routes/liveListeningRoutes.js';
 import lyricsRoutes from './routes/lyricsRoutes.js';
 
 // load services
