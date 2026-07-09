@@ -22,7 +22,7 @@ const userSchema = new mongoose.Schema({
     default: null,
   },
   
-  // Primary Spotify tokens
+  // primary Spotify tokens
   accessToken: { 
     type: String, 
     required: true,
@@ -35,7 +35,7 @@ const userSchema = new mongoose.Schema({
     type: Date,
   },
   
-  // User preferences for personalization
+  // user preferences for personalization
   preferences: {
     preferredGenres: {
       type: [String],
@@ -66,7 +66,7 @@ const userSchema = new mongoose.Schema({
     },
   },
 
-  // Secondary service tokens (YouTube Music, Apple Music)
+  // secondary service tokens (YouTube Music, Apple Music)
   authTokens: {
     type: Map,
     of: new mongoose.Schema({
@@ -85,13 +85,13 @@ const userSchema = new mongoose.Schema({
     }, { _id: false }),
     default: new Map(),
   },
-  // Structure example:
+  // structure example:
   // authTokens: {
-  //   'youtube': { accessToken: '...', refreshToken: '...', tokenExpires: '...' },
-  //   'apple': { accessToken: '...', refreshToken: null, tokenExpires: null }
+  
+  // 'apple': { accessToken: '...', refreshToken: null, tokenExpires: null }
   // }
 
-  // User activity tracking
+  // user activity tracking
   lastActive: {
     type: Date,
     default: Date.now,
@@ -107,26 +107,25 @@ const userSchema = new mongoose.Schema({
   toObject: { virtuals: true },
 });
 
-// Indexes for better query performance - Define them here to avoid duplicates
 userSchema.index({ lastActive: -1 });
 
-// Virtual for linked services
+// virtual for linked services
 userSchema.virtual('linkedServices').get(function() {
   if (!this.authTokens) return [];
   return Array.from(this.authTokens.keys());
 });
 
-// Method to check if token is expired
+// method to check if token is expired
 userSchema.methods.isTokenExpired = function() {
   return this.tokenExpires && this.tokenExpires < Date.now();
 };
 
-// Method to check if service is linked
+// method to check if service is linked
 userSchema.methods.isServiceLinked = function(service) {
   return this.authTokens && this.authTokens.has(service);
 };
 
-// Pre-save middleware to update lastActive
+// pre-save middleware to update lastActive
 userSchema.pre('save', function(next) {
   this.lastActive = Date.now();
   next();

@@ -1,22 +1,10 @@
 import * as mlService from '../services/mlService.js';
 
-/**
- * Live Listening Controller
- * Manages real-time mood tracking sessions
- */
-
-/**
- * @desc    Start new live listening session
- * @route   POST /api/live/session/start
- * @access  Protected
- */
 export const startLiveSession = async (req, res) => {
   try {
     const user = req.user;
 
-
     const sessionData = await mlService.startLiveSession(user._id.toString());
-
 
     res.json(sessionData);
 
@@ -29,11 +17,6 @@ export const startLiveSession = async (req, res) => {
   }
 };
 
-/**
- * @desc    Add track to live session
- * @route   POST /api/live/session/add-track
- * @access  Protected
- */
 export const addTrackToSession = async (req, res) => {
   try {
     const user = req.user;
@@ -45,7 +28,6 @@ export const addTrackToSession = async (req, res) => {
       });
     }
 
-
     const sessionData = await mlService.addTrackToLiveSession(
       user._id.toString(),
       sessionId,
@@ -55,7 +37,6 @@ export const addTrackToSession = async (req, res) => {
         artist_name: artistName
       }
     );
-
 
     res.json(sessionData);
 
@@ -68,11 +49,6 @@ export const addTrackToSession = async (req, res) => {
   }
 };
 
-/**
- * @desc    Get current live session
- * @route   GET /api/live/session/current
- * @access  Protected
- */
 export const getCurrentSession = async (req, res) => {
   try {
     const user = req.user;
@@ -92,11 +68,6 @@ export const getCurrentSession = async (req, res) => {
   }
 };
 
-/**
- * @desc    End live session
- * @route   POST /api/live/session/end
- * @access  Protected
- */
 export const endSession = async (req, res) => {
   try {
     const user = req.user;
@@ -108,12 +79,10 @@ export const endSession = async (req, res) => {
       });
     }
 
-
     const finalAnalytics = await mlService.endLiveSession(
       user._id.toString(),
       sessionId
     );
-
 
     res.json(finalAnalytics);
 
@@ -126,11 +95,6 @@ export const endSession = async (req, res) => {
   }
 };
 
-/**
- * @desc    Auto-check session for inactivity
- * @route   POST /api/live/session/auto-check
- * @access  Protected
- */
 export const autoCheckSession = async (req, res) => {
   try {
     const user = req.user;

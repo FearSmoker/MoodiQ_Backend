@@ -1,22 +1,13 @@
 import axios from 'axios';
 import { ML_API_URL } from '../utils/constants.js';
 
-/**
- * ML Service Integration - COMPLETE v3.0
- * Updated for new model features:
- * - Advanced playlist aggregation
- * - Live listening queue
- * - MongoDB recommendations
- * - Enhanced analytics
- */
-
 const mlClient = axios.create({
   baseURL: ML_API_URL,
-  // Was 180s — far longer than the frontend's 10s analytics poll interval,
+  // was 180s — far longer than the frontend's 10s analytics poll interval,
   // so a single slow response let requests stack up indefinitely and
   // resolve out of order (stale data overwriting fresh data on screen).
-  // Analytics/read endpoints should fail fast so the frontend's own
-  // Promise.allSettled fallback/error-banner logic can kick in instead.
+  // analytics/read endpoints should fail fast so the frontend's own
+  // promise.allSettled fallback/error-banner logic can kick in instead.
   timeout: 20000,
   headers: {
     'Content-Type': 'application/json',
@@ -32,10 +23,10 @@ const logRateLimited = (key, ...args) => {
   }
 };
 
-// Request interceptor
+// request interceptor
 mlClient.interceptors.request.use(
   (config) => {
-    // Resolve base URL dynamically to prevent ES6 import hoisting time issues with dotenv
+    
     config.baseURL = process.env.ML_API_URL || ML_API_URL;
     logRateLimited(`ml_req_${config.url}`, `🤖 ML API Request: ${config.method.toUpperCase()} ${config.baseURL}${config.url}`);
     return config;
@@ -46,7 +37,7 @@ mlClient.interceptors.request.use(
   }
 );
 
-// Response interceptor
+// response interceptor
 mlClient.interceptors.response.use(
   (response) => {
     logRateLimited(`ml_res_${response.config.url}`, `✅ ML API Response: ${response.config.url} - ${response.status}`);
@@ -75,13 +66,9 @@ mlClient.interceptors.response.use(
 );
 
 // ============================================
-// 1. MOOD PREDICTION (HYBRID SPOTIFY)
+
 // ============================================
 
-/**
- * Analyze Spotify playlist with ADVANCED AGGREGATION
- * Returns aggregated_features for graphing
- */
 export const analyzeSpotifyPlaylist = async (playlistId, accessToken, userId = null, includeUnavailable = false) => {
   try {
     const response = await mlClient.post('/predict/spotify/playlist', {
@@ -95,16 +82,13 @@ export const analyzeSpotifyPlaylist = async (playlistId, accessToken, userId = n
       }
     });
     
-    // Response now includes aggregated_features and aggregatedMoodTags
+    // response now includes aggregated_features and aggregatedMoodTags
     return response.data;
   } catch (error) {
     throw enhanceError(error, 'analyze Spotify playlist');
   }
 };
 
-/**
- * Analyze currently playing track
- */
 export const analyzeCurrentlyPlaying = async (accessToken, userId = null) => {
   try {
     const response = await mlClient.get('/predict/spotify/currently-playing', {
@@ -119,9 +103,6 @@ export const analyzeCurrentlyPlaying = async (accessToken, userId = null) => {
   }
 };
 
-/**
- * Batch analyze tracks (legacy Multi-API)
- */
 export const batchAnalyzeTracks = async (tracks, userId = null) => {
   try {
     const response = await mlClient.post('/predict/batch-analyze', {
@@ -135,12 +116,9 @@ export const batchAnalyzeTracks = async (tracks, userId = null) => {
 };
 
 // ============================================
-// 2. LIVE LISTENING QUEUE (NEW)
+
 // ============================================
 
-/**
- * Start a live listening session
- */
 export const startLiveSession = async (userId) => {
   try {
     const response = await mlClient.post('/live/session/start', {
@@ -152,9 +130,6 @@ export const startLiveSession = async (userId) => {
   }
 };
 
-/**
- * Add track to live session
- */
 export const addTrackToLiveSession = async (userId, sessionId, trackName, artistName, trackId = null) => {
   try {
     const response = await mlClient.post('/live/session/add-track', {
@@ -170,9 +145,6 @@ export const addTrackToLiveSession = async (userId, sessionId, trackName, artist
   }
 };
 
-/**
- * Get current live session analytics
- */
 export const getCurrentLiveSession = async (userId) => {
   try {
     const response = await mlClient.get(`/live/session/${userId}/current`);
@@ -182,9 +154,6 @@ export const getCurrentLiveSession = async (userId) => {
   }
 };
 
-/**
- * End live session and save to MongoDB
- */
 export const endLiveSession = async (userId, sessionId) => {
   try {
     const response = await mlClient.post('/live/session/end', {
@@ -197,22 +166,19 @@ export const endLiveSession = async (userId, sessionId) => {
   }
 };
 
-/**
- * Auto-check for session timeout
- */
 export const autoCheckLiveSession = async (userId) => {
   try {
     const response = await mlClient.post(`/live/session/auto-check/${userId}`);
     return response.data;
   } catch (error) {
-    // Don't throw for auto-check failures
+    // don't throw for auto-check failures
     console.warn('Failed to auto-check session:', error.message);
     return { auto_ended: false };
   }
 };
 
 // ============================================
-// 3. PLAYLIST GENERATION
+
 // ============================================
 
 export const generateMoodPlaylist = async (targetMood, userId, accessToken, seedTrackId = null, limit = 20) => {
@@ -303,12 +269,9 @@ export const generatePersonalizedPlaylist = async (userId, accessToken, limit = 
 };
 
 // ============================================
-// 4. DATABASE RECOMMENDATIONS (NEW)
+
 // ============================================
 
-/**
- * Get MongoDB-powered recommendations based on playlist
- */
 export const getDatabaseRecommendations = async (userId, playlistId = null, targetMood = null, limit = 50) => {
   try {
     const response = await mlClient.post('/generate/database-recommendations', {
@@ -430,10 +393,6 @@ export const logUserBehavior = async (userId, trackId, action, timeOfDay = null)
 // 7. ANALYTICS (ENHANCED)
 // ============================================
 
-/**
- * Get user mood timeline with aggregated features
- * Returns data suitable for graphing
- */
 export const getUserMoodTimeline = async (userId, days = 7, accessToken = null) => {
   try {
     const response = await mlClient.get(`/analytics/user/${userId}/timeline`, {
@@ -448,9 +407,6 @@ export const getUserMoodTimeline = async (userId, days = 7, accessToken = null) 
   }
 };
 
-/**
- * Get user mood distribution
- */
 export const getUserMoodDistribution = async (userId) => {
   try {
     const response = await mlClient.get(`/analytics/user/${userId}/mood-distribution`);
@@ -460,9 +416,6 @@ export const getUserMoodDistribution = async (userId) => {
   }
 };
 
-/**
- * Get mood patterns (co-occurrence analysis)
- */
 export const getUserMoodPatterns = async (userId) => {
   try {
     const response = await mlClient.get(`/analytics/user/${userId}/mood-patterns`);
@@ -472,9 +425,6 @@ export const getUserMoodPatterns = async (userId) => {
   }
 };
 
-/**
- * Get feedback statistics
- */
 export const getUserFeedbackStats = async (userId) => {
   try {
     const response = await mlClient.get(`/analytics/user/${userId}/feedback-stats`);
@@ -484,9 +434,6 @@ export const getUserFeedbackStats = async (userId) => {
   }
 };
 
-/**
- * Get global mood trends
- */
 export const getGlobalMoodTrends = async (limit = 100) => {
   try {
     const response = await mlClient.get('/analytics/global/mood-trends', {
@@ -498,13 +445,10 @@ export const getGlobalMoodTrends = async (limit = 100) => {
   }
 };
 
-/**
- * Get MongoDB session history (for long-term graphs)
- */
 export const getUserSessionHistory = async (userId, days = 30) => {
   try {
-    // This would query MongoDB directly via your backend
-    // For now, use timeline endpoint
+    // this would query MongoDB directly via your backend
+    // for now, use timeline endpoint
     const response = await mlClient.get(`/analytics/user/${userId}/timeline`, {
       params: { days: days }
     });
@@ -617,32 +561,32 @@ export const handleMLError = (error, fallbackMessage = 'ML service temporarily u
 };
 
 export default {
-  // Spotify Integration
+  // spotify Integration
   analyzeSpotifyPlaylist,
   analyzeCurrentlyPlaying,
   batchAnalyzeTracks,
 
-  // Live Listening (NEW)
+  // live Listening (NEW)
   startLiveSession,
   addTrackToLiveSession,
   getCurrentLiveSession,
   endLiveSession,
   autoCheckLiveSession,
 
-  // Playlist Generation
+  // playlist Generation
   generateMoodPlaylist,
   generateActivityPlaylist,
   generateFromTopTracks,
   generateFromRecentlyPlayed,
   generatePersonalizedPlaylist,
 
-  // Database Recommendations (NEW)
+  // database Recommendations (NEW)
   getDatabaseRecommendations,
 
-  // Optimization
+  // optimization
   optimizePlaylistFlow,
 
-  // Training & Personalization
+  // training & Personalization
   submitFeedback,
   submitBatchFeedback,
   triggerModelRetrain,
@@ -651,7 +595,7 @@ export default {
   resetUserPersonalization,
   logUserBehavior,
 
-  // Analytics (ENHANCED)
+  // analytics (ENHANCED)
   getUserMoodTimeline,
   getUserMoodDistribution,
   getUserMoodPatterns,
@@ -659,14 +603,14 @@ export default {
   getGlobalMoodTrends,
   getUserSessionHistory,
 
-  // NLP
+  // nLP
   processNLPCommand,
 
-  // Health
+  // health
   checkHealth,
   getMLStats,
 
-  // Helpers
+  // helpers
   formatTracksForML,
   handleMLError
 };

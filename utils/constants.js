@@ -1,6 +1,4 @@
-/**
- * Shared Constants
- */
+
 
 export const ML_API_URL = process.env.ML_API_URL || 'https://moodiq-model.onrender.com';
 
@@ -16,9 +14,9 @@ export const ACTIVITY_TYPES = {
 };
 
 export const TIME_RANGES = {
-  SHORT: 'short_term',      // Last 4 weeks
-  MEDIUM: 'medium_term',    // Last 6 months
-  LONG: 'long_term'         // All time
+  SHORT: 'short_term',      // last 4 weeks
+  MEDIUM: 'medium_term',    // last 6 months
+  LONG: 'long_term'         // all time
 };
 
 export const OPTIMIZATION_ALGORITHMS = {

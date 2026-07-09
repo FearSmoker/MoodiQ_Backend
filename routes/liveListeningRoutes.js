@@ -10,26 +10,26 @@ import { protect } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
-// All routes are protected
+// all routes are protected
 router.use(protect);
 
 // ===============================================
-// Live Listening Endpoints
+// live Listening Endpoints
 // ===============================================
 
-// Start new live session
+// start new live session
 router.post('/session/start', startLiveSession);
 
-// Add track to session
+// add track to session
 router.post('/session/add-track', addTrackToSession);
 
-// Get current session
+// get current session
 router.get('/session/current', getCurrentSession);
 
-// End session
+// end session
 router.post('/session/end', endSession);
 
-// Auto-check session (inactivity timeout)
+// auto-check session (inactivity timeout)
 router.post('/session/auto-check', autoCheckSession);
 
 export default router;

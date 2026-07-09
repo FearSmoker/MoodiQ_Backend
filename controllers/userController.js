@@ -2,11 +2,6 @@ import User from '../models/userModel.js';
 import SharedPlaylist from '../models/sharedPlaylistModel.js';
 import * as mlService from '../services/mlService.js';
 
-/**
- * @desc    Get user preferences
- * @route   GET /api/user/preferences
- * @access  Protected
- */
 export const getPreferences = async (req, res) => {
   try {
     res.json({
@@ -19,11 +14,6 @@ export const getPreferences = async (req, res) => {
   }
 };
 
-/**
- * @desc    Update user preferences
- * @route   PUT /api/user/preferences
- * @access  Protected
- */
 export const updatePreferences = async (req, res) => {
   try {
     const user = await User.findById(req.user._id);
@@ -51,11 +41,6 @@ export const updatePreferences = async (req, res) => {
   }
 };
 
-/**
- * @desc    Submit feedback for mood prediction (ML model learning)
- * @route   POST /api/user/feedback
- * @access  Protected
- */
 export const submitFeedback = async (req, res) => {
   const { trackId, correctMood, playlistId } = req.body;
 
@@ -103,11 +88,6 @@ export const submitFeedback = async (req, res) => {
   }
 };
 
-/**
- * @desc    Submit batch feedback
- * @route   POST /api/user/feedback/batch
- * @access  Protected
- */
 export const submitBatchFeedback = async (req, res) => {
   const { feedbacks } = req.body;
 
@@ -155,11 +135,6 @@ export const submitBatchFeedback = async (req, res) => {
   }
 };
 
-/**
- * @desc    Log user behavior (implicit learning)
- * @route   POST /api/user/behavior
- * @access  Protected
- */
 export const logUserBehavior = async (req, res) => {
   const { trackId, action, timeOfDay } = req.body;
 
@@ -199,11 +174,6 @@ export const logUserBehavior = async (req, res) => {
   }
 };
 
-/**
- * @desc    Share a playlist with mood data
- * @route   POST /api/user/share
- * @access  Protected
- */
 export const sharePlaylist = async (req, res) => {
   const { playlistId, moodData, playlistName, playlistImage } = req.body;
 
@@ -240,11 +210,6 @@ export const sharePlaylist = async (req, res) => {
   }
 };
 
-/**
- * @desc    Get shared playlist data
- * @route   GET /api/user/share/:shareId
- * @access  Public
- */
 export const getSharedPlaylist = async (req, res) => {
   const { shareId } = req.params;
 
@@ -282,11 +247,6 @@ export const getSharedPlaylist = async (req, res) => {
   }
 };
 
-/**
- * @desc    Get user's shared playlists
- * @route   GET /api/user/shares
- * @access  Protected
- */
 export const getUserShares = async (req, res) => {
   try {
     const shares = await SharedPlaylist.find({ owner: req.user._id })
@@ -304,11 +264,6 @@ export const getUserShares = async (req, res) => {
   }
 };
 
-/**
- * @desc    Delete a shared playlist
- * @route   DELETE /api/user/share/:shareId
- * @access  Protected
- */
 export const deleteShare = async (req, res) => {
   const { shareId } = req.params;
 
@@ -337,11 +292,6 @@ export const deleteShare = async (req, res) => {
   }
 };
 
-/**
- * @desc    Handle voice/chat commands via ML NLP service
- * @route   POST /api/user/voice-command
- * @access  Protected
- */
 export const handleVoiceCommand = async (req, res) => {
   const { command, context } = req.body;
 
@@ -387,11 +337,6 @@ export const handleVoiceCommand = async (req, res) => {
   }
 };
 
-/**
- * @desc    Get user statistics and learning progress
- * @route   GET /api/user/stats
- * @access  Protected
- */
 export const getUserStats = async (req, res) => {
   try {
     const sharesCount = await SharedPlaylist.countDocuments({ owner: req.user._id });
@@ -428,11 +373,6 @@ export const getUserStats = async (req, res) => {
   }
 };
 
-/**
- * @desc    Get user's mood timeline
- * @route   GET /api/user/mood-timeline
- * @access  Protected
- */
 export const getUserMoodTimeline = async (req, res) => {
   const { days = 7 } = req.query;
 
@@ -465,11 +405,6 @@ export const getUserMoodTimeline = async (req, res) => {
   }
 };
 
-/**
- * @desc    Get user's personalized model info
- * @route   GET /api/user/personalized-model
- * @access  Protected
- */
 export const getUserPersonalizedModel = async (req, res) => {
   try {
     console.log(`🧠 Fetching personalized model for user ${req.user._id}`);
@@ -497,11 +432,6 @@ export const getUserPersonalizedModel = async (req, res) => {
   }
 };
 
-/**
- * @desc    Trigger personalized model retraining
- * @route   POST /api/user/retrain-model
- * @access  Protected
- */
 export const triggerModelRetrain = async (req, res) => {
   const { force = false } = req.body;
 
@@ -544,11 +474,6 @@ export const triggerModelRetrain = async (req, res) => {
   }
 };
 
-/**
- * @desc    Reset user personalization
- * @route   DELETE /api/user/reset-personalization
- * @access  Protected
- */
 export const resetUserPersonalization = async (req, res) => {
   try {
     console.log(`🗑️ Resetting personalization for user ${req.user._id}`);

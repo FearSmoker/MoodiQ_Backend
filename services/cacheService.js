@@ -4,10 +4,10 @@ let redisClient;
 let isConnected = false;
 let connectionAttempted = false;
 
-// Global memory cache fallback when Redis is offline
+// global memory cache fallback when Redis is offline
 const memoryCache = new Map();
 
-// Helper to remove expired entries from memory cache
+// helper to remove expired entries from memory cache
 const cleanMemoryCache = () => {
   const now = Date.now();
   for (const [key, item] of memoryCache.entries()) {
@@ -17,12 +17,8 @@ const cleanMemoryCache = () => {
   }
 };
 
-
-/**
- * Connect to Redis
- */
 export const connectRedis = async () => {
-  // Check if already attempted connection
+  // check if already attempted connection
   if (connectionAttempted) {
     console.log('ℹ️ Redis connection already attempted, skipping...');
     return redisClient;
@@ -30,7 +26,7 @@ export const connectRedis = async () => {
 
   connectionAttempted = true;
 
-  // Check if caching is enabled
+  // check if caching is enabled
   if (process.env.ENABLE_CACHE === 'false') {
     console.log('ℹ️ Redis caching is disabled via ENABLE_CACHE=false');
     return null;
@@ -50,14 +46,14 @@ export const connectRedis = async () => {
       url: redisUrl,
       socket: {
         reconnectStrategy: (retries) => {
-          // CRITICAL: Limit reconnection attempts to prevent spam
+          // cRITICAL: Limit reconnection attempts to prevent spam
           if (retries > 3) {
             console.error('❌ Redis reconnection failed after 3 attempts. Giving up.');
             isConnected = false;
             return new Error('Max reconnection attempts reached');
           }
           
-          // Exponential backoff: 5s, 10s, 20s
+          // exponential backoff: 5s, 10s, 20s
           const delay = Math.min(retries * 5000, 20000);
           console.log(`⏳ Redis reconnecting in ${delay/1000}s (attempt ${retries}/3)...`);
           return delay;
@@ -66,7 +62,7 @@ export const connectRedis = async () => {
       },
     });
 
-    // CRITICAL: Only log once when error occurs
+    // cRITICAL: Only log once when error occurs
     let errorLogged = false;
     redisClient.on('error', (err) => {
       if (!errorLogged) {
@@ -83,7 +79,7 @@ export const connectRedis = async () => {
     redisClient.on('ready', () => {
       console.log('✅ Redis client ready');
       isConnected = true;
-      errorLogged = false; // Reset error flag when connection is restored
+      errorLogged = false; // reset error flag when connection is restored
     });
 
     redisClient.on('end', () => {
@@ -93,7 +89,7 @@ export const connectRedis = async () => {
 
     await redisClient.connect();
     
-    // Test connection with timeout
+    // test connection with timeout
     const pingTimeout = setTimeout(() => {
       throw new Error('Redis ping timeout');
     }, 5000);
@@ -113,9 +109,6 @@ export const connectRedis = async () => {
   }
 };
 
-/**
- * Get value from cache
- */
 export const getFromCache = async (key) => {
   if (!redisClient || !isConnected) {
     cleanMemoryCache();
@@ -137,7 +130,7 @@ export const getFromCache = async (key) => {
     const data = await redisClient.get(key);
     
     if (data) {
-      // Only log in development
+      // only log in development
       if (process.env.NODE_ENV === 'development') {
         console.log(`📦 Cache HIT: ${key}`);
       }
@@ -146,7 +139,7 @@ export const getFromCache = async (key) => {
     
     return null;
   } catch (err) {
-    // Only log if it's not a connection error
+    // only log if it's not a connection error
     if (err.message !== 'Socket not connected') {
       console.error(`Error getting from cache (${key}):`, err.message);
     }
@@ -154,9 +147,6 @@ export const getFromCache = async (key) => {
   }
 };
 
-/**
- * Set value in cache
- */
 export const setInCache = async (key, value, expiration = 3600) => {
   if (!redisClient || !isConnected) {
     cleanMemoryCache();
@@ -173,7 +163,7 @@ export const setInCache = async (key, value, expiration = 3600) => {
       EX: expiration,
     });
     
-    // Only log in development
+    // only log in development
     if (process.env.NODE_ENV === 'development') {
       console.log(`💾 Cache SET: ${key} (expires in ${expiration}s)`);
     }
@@ -186,9 +176,6 @@ export const setInCache = async (key, value, expiration = 3600) => {
   }
 };
 
-/**
- * Delete key from cache
- */
 export const deleteFromCache = async (key) => {
   if (!redisClient || !isConnected) {
     return memoryCache.delete(key);
@@ -208,9 +195,6 @@ export const deleteFromCache = async (key) => {
   }
 };
 
-/**
- * Delete keys matching pattern
- */
 export const deletePattern = async (pattern) => {
   if (!redisClient || !isConnected) {
     let deletedCount = 0;
@@ -247,17 +231,10 @@ export const deletePattern = async (pattern) => {
   }
 };
 
-
-/**
- * Check if Redis is connected
- */
 export const isRedisConnected = () => {
   return isConnected && redisClient && redisClient.isOpen;
 };
 
-/**
- * Flush all cache
- */
 export const flushCache = async () => {
   if (!redisClient || !isConnected) {
     return false;
@@ -273,9 +250,6 @@ export const flushCache = async () => {
   }
 };
 
-/**
- * Get cache statistics
- */
 export const getCacheStats = async () => {
   if (!redisClient || !isConnected) {
     return { connected: false };

@@ -40,11 +40,10 @@ const sharedPlaylistSchema = new mongoose.Schema({
   timestamps: true,
 });
 
-// Indexes
+// indexes
 sharedPlaylistSchema.index({ owner: 1, createdAt: -1 });
 sharedPlaylistSchema.index({ createdAt: -1 });
 
-// Auto-expire shared playlists after 30 days (optional)
-// sharedPlaylistSchema.index({ createdAt: 1 }, { expireAfterSeconds: 2592000 });
+// auto-expire shared playlists after 30 days (optional)
 
 export default mongoose.model('SharedPlaylist', sharedPlaylistSchema);

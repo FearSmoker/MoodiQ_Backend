@@ -3,23 +3,6 @@ import * as mlService from '../services/mlService.js';
 import ListeningHistory from '../models/listeningHistoryModel.js';
 import { getAudioFeaturesForTracks, inferMoodFromFeatures, getMoodFromRecentlyPlayed as spotifyMoodFromRecent } from '../controllers/recommendationsController.js';
 
-/**
- * Analytics Controller - Complete ML Integration v3.0
- * 
- * Features:
- * - ✅ 12-mood system support
- * - ✅ Aggregated features for graphs
- * - ✅ Multi-tag mood analysis
- * - ✅ Live listening integration
- * - ✅ Enhanced error handling
- * - ✅ Spotify-native fallback when ML has no history data
- */
-
-/**
- * @desc    Get comprehensive mood trends with aggregated features
- * @route   GET /api/analytics/mood-trends
- * @access  Protected
- */
 export const getMoodTrends = async (req, res) => {
   try {
     const user = req.user;
@@ -27,7 +10,7 @@ export const getMoodTrends = async (req, res) => {
 
     console.log(`📊 Fetching mood trends for ${days} days, ${limit} tracks`);
 
-    // Try ML service first
+    // try ML service first
     let timelineResponse = null;
     try {
       timelineResponse = await mlService.getUserMoodTimeline(
@@ -39,7 +22,7 @@ export const getMoodTrends = async (req, res) => {
       console.warn(`⚠️ ML timeline unavailable (${mlErr.message}), falling back to Spotify recently-played`);
     }
 
-    // If ML has no data, fall back to Spotify recently-played
+    // if ML has no data, fall back to Spotify recently-played
     if (!timelineResponse?.timeline || timelineResponse.timeline.length === 0) {
       console.log('📊 No ML history — using Spotify recently-played as mood source');
       
@@ -61,7 +44,7 @@ export const getMoodTrends = async (req, res) => {
           });
         }
 
-        // Unique tracks
+        // unique tracks
         const trackMap = new Map();
         items.forEach(item => {
           const t = item?.track;
@@ -70,7 +53,7 @@ export const getMoodTrends = async (req, res) => {
 
         const featureMap = await getAudioFeaturesForTracks(spotifyApi, Array.from(trackMap.keys()));
 
-        // Build daily mood groups
+        // build daily mood groups
         const dayMap = {};
         const moodDist = {};
 
@@ -131,7 +114,7 @@ export const getMoodTrends = async (req, res) => {
       }
     }
 
-    // ML data is available — use it
+    // mL data is available — use it
     const timeline = timelineResponse.timeline;
     const aggregatedFeatures = calculateAggregatedFeatures(timeline);
     const moodDistribution = timelineResponse.overall_statistics?.mood_distribution || {};
@@ -188,24 +171,13 @@ export const getMoodTrends = async (req, res) => {
   }
 };
 
-
-
-/**
-
-
-
-/**
- * @desc    Get mood distribution analysis (12-mood system)
- * @route   GET /api/analytics/mood-distribution
- * @access  Protected
- */
 export const getMoodDistribution = async (req, res) => {
   try {
     const user = req.user;
 
     console.log(`📊 Fetching mood distribution for user: ${user._id}`);
 
-    // Use ML service's mood distribution endpoint
+    // use ML service's mood distribution endpoint
     let distributionResponse = null;
     try {
       distributionResponse = await mlService.getUserMoodDistribution(
@@ -298,11 +270,6 @@ export const getMoodDistribution = async (req, res) => {
   }
 };
 
-/**
- * @desc    Get mood patterns (co-occurrence analysis)
- * @route   GET /api/analytics/mood-patterns
- * @access  Protected
- */
 export const getMoodPatterns = async (req, res) => {
   try {
     const user = req.user;
@@ -326,11 +293,6 @@ export const getMoodPatterns = async (req, res) => {
   }
 };
 
-/**
- * @desc    Get listening activity analytics
- * @route   GET /api/analytics/activity
- * @access  Protected
- */
 export const getActivityAnalytics = async (req, res) => {
   try {
     const user = req.user;
@@ -447,11 +409,6 @@ export const getActivityAnalytics = async (req, res) => {
   }
 };
 
-/**
- * @desc    Get genre analysis
- * @route   GET /api/analytics/genres
- * @access  Protected
- */
 export const getGenreAnalysis = async (req, res) => {
   try {
     const user = req.user;
@@ -541,11 +498,6 @@ export const getGenreAnalysis = async (req, res) => {
   }
 };
 
-/**
- * @desc    Get user's mood timeline (ML-powered) - PRIMARY ENDPOINT
- * @route   GET /api/analytics/mood-timeline
- * @access  Protected
- */
 export const getMoodTimeline = async (req, res) => {
   const { days = 7 } = req.query;
 
@@ -592,7 +544,7 @@ export const getMoodTimeline = async (req, res) => {
         });
       }
 
-      // Unique tracks
+      // unique tracks
       const trackMap = new Map();
       items.forEach(item => {
         const t = item?.track;
@@ -601,13 +553,12 @@ export const getMoodTimeline = async (req, res) => {
 
       const featureMap = await getAudioFeaturesForTracks(spotifyApi, Array.from(trackMap.keys()));
 
-      // Check unique days to decide granularity (by time/HH:MM vs by day/YYYY-MM-DD)
       const uniqueDays = new Set(items.map(item => 
         item.played_at ? item.played_at.split('T')[0] : new Date().toISOString().split('T')[0]
       ));
       const groupByTime = uniqueDays.size <= 1;
 
-      // Build daily/hourly mood groups
+      // build daily/hourly mood groups
       const dayMap = {};
       const moodDist = {};
 
@@ -674,7 +625,7 @@ export const getMoodTimeline = async (req, res) => {
 
     console.log(`✅ Timeline: ${timelineResponse.timeline?.length || 0} data points`);
 
-    // Add aggregated features for frontend graphs
+    // add aggregated features for frontend graphs
     if (timelineResponse.timeline && timelineResponse.timeline.length > 0) {
       timelineResponse.aggregatedFeatures = calculateAggregatedFeatures(
         timelineResponse.timeline
@@ -708,11 +659,6 @@ export const getMoodTimeline = async (req, res) => {
   }
 };
 
-/**
- * @desc    Get real-time current track analysis (UPDATED)
- * @route   GET /api/analytics/realtime
- * @access  Protected
- */
 export const getRealtimeAnalysis = async (req, res) => {
   try {
     const user = req.user;
@@ -762,7 +708,7 @@ export const getRealtimeAnalysis = async (req, res) => {
         });
       }
 
-      // Fetch features
+      // fetch features
       let features = null;
       try {
         const featResponse = await spotifyApi.getAudioFeaturesForTracks([item.id]);
@@ -887,7 +833,6 @@ export const getRealtimeAnalysis = async (req, res) => {
       });
     }
 
-    // Gracefully handle ML service 503, connection refused, timeouts, or transient 500s with a 200 fallback
     return res.json({
       isPlaying: false,
       message: `Real-time playback analysis temporarily unavailable (${error.message})`,
@@ -896,11 +841,6 @@ export const getRealtimeAnalysis = async (req, res) => {
   }
 };
 
-/**
- * @desc    Get global mood trends
- * @route   GET /api/analytics/global-trends
- * @access  Protected
- */
 export const getGlobalMoodTrends = async (req, res) => {
   try {
     const { limit = 100 } = req.query;
@@ -922,16 +862,11 @@ export const getGlobalMoodTrends = async (req, res) => {
   }
 };
 
-/**
- * @desc    Get live listening session analytics
- * @route   GET /api/analytics/live-session/:userId
- * @access  Protected
- */
 export const getLiveSessionAnalytics = async (req, res) => {
   try {
     const { userId } = req.params;
 
-    // Ensure user can only access their own session
+    // ensure user can only access their own session
     if (userId !== req.user._id.toString()) {
       return res.status(403).json({ 
         message: 'Access denied',
@@ -955,12 +890,9 @@ export const getLiveSessionAnalytics = async (req, res) => {
 };
 
 // ============================================
-// HELPER FUNCTIONS
+// hELPER FUNCTIONS
 // ============================================
 
-/**
- * Calculate aggregated audio features for frontend graphs
- */
 function calculateAggregatedFeatures(timeline) {
   if (!timeline || timeline.length === 0) {
     return null;
@@ -976,7 +908,7 @@ function calculateAggregatedFeatures(timeline) {
 
   timeline.forEach(day => {
     if (day.tracks && day.tracks.length > 0) {
-      // Calculate average features for the day
+      // calculate average features for the day
       const dayFeatures = {
         valence: 0,
         energy: 0,
@@ -986,7 +918,7 @@ function calculateAggregatedFeatures(timeline) {
       };
 
       day.tracks.forEach(track => {
-        // Use track's actual features if present, otherwise estimate from moods
+        // use track's actual features if present, otherwise estimate from moods
         let trackFeatures = track.features;
         if (!trackFeatures) {
           const moodScores = track.all_moods || [];
@@ -1021,11 +953,8 @@ function calculateAggregatedFeatures(timeline) {
   };
 }
 
-/**
- * Estimate audio features from mood labels
- */
 function estimateFeaturesFromMoods(moods) {
-  // Mood to feature mapping (based on 12 extended moods and legacy fallbacks)
+  // mood to feature mapping (based on 12 extended moods and legacy fallbacks)
   const moodFeatureMap = {
     // 12 Extended Moods (FastAPI / Retrained Model)
     'Happy': { valence: 0.85, energy: 0.725, danceability: 0.80, acousticness: 0.25 },
@@ -1041,7 +970,7 @@ function estimateFeaturesFromMoods(moods) {
     'Anxious': { valence: 0.35, energy: 0.60, danceability: 0.40, acousticness: 0.35 },
     'Excited': { valence: 0.85, energy: 0.90, danceability: 0.80, acousticness: 0.20 },
 
-    // Legacy / Fallback Moods
+    // legacy / Fallback Moods
     'Joyful': { valence: 0.85, energy: 0.70, danceability: 0.75, acousticness: 0.30 },
     'Party': { valence: 0.80, energy: 0.90, danceability: 0.90, acousticness: 0.15 },
     'Melancholic': { valence: 0.20, energy: 0.25, danceability: 0.30, acousticness: 0.70 },
@@ -1052,11 +981,11 @@ function estimateFeaturesFromMoods(moods) {
     'Ambient': { valence: 0.50, energy: 0.20, danceability: 0.25, acousticness: 0.80 }
   };
 
-  // Default features
+  // default features
   let features = { valence: 0.5, energy: 0.5, danceability: 0.5, acousticness: 0.5 };
 
   if (moods && moods.length > 0) {
-    // Average features from all moods
+    // average features from all moods
     const moodFeatures = moods
       .map(mood => moodFeatureMap[mood])
       .filter(f => f !== undefined);
@@ -1074,17 +1003,13 @@ function estimateFeaturesFromMoods(moods) {
   return { ...features, isEstimate: true };
 }
 
-
-/**
- * Calculate average of array values
- */
 function calculateAverage(arr) {
   if (!arr || arr.length === 0) return 0;
   const sum = arr.reduce((acc, val) => acc + parseFloat(val), 0);
   return (sum / arr.length).toFixed(2);
 }
 
-// Export all functions
+// export all functions
 export default {
   getMoodTrends,
   getMoodDistribution,

@@ -8,13 +8,13 @@ import { protect } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
-// All routes are protected
+// all routes are protected
 router.use(protect);
 
-// Transfer status
+// transfer status
 router.get('/status', getTransferStatus);
 
-// Transfer routes
+// transfer routes
 router.post('/youtube', transferToYouTube);
 router.post('/apple', transferToApple);
 

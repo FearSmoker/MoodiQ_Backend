@@ -4,9 +4,6 @@ import { broadcastUpdate } from '../services/socketService.js';
 
 const APPLE_MUSIC_API_URL = 'https://api.music.apple.com/v1';
 
-/**
- * Search for a track on YouTube Music
- */
 const searchTrackOnYouTube = async (trackName, artistName, accessToken) => {
   try {
     const youtube = google.youtube('v3');
@@ -16,7 +13,7 @@ const searchTrackOnYouTube = async (trackName, artistName, accessToken) => {
       part: 'snippet',
       q: query,
       type: 'video',
-      videoCategoryId: '10', // Music category
+      videoCategoryId: '10', // music category
       maxResults: 1,
       access_token: accessToken,
     });
@@ -32,9 +29,6 @@ const searchTrackOnYouTube = async (trackName, artistName, accessToken) => {
   }
 };
 
-/**
- * Search for a track on Apple Music
- */
 const searchTrackOnAppleMusic = async (trackName, artistName, userToken, developerToken) => {
   try {
     const query = `${trackName} ${artistName}`;
@@ -62,14 +56,11 @@ const searchTrackOnAppleMusic = async (trackName, artistName, userToken, develop
   }
 };
 
-/**
- * Create a playlist on YouTube Music
- */
 const createYouTubePlaylist = async (playlistName, videoIds, accessToken) => {
   try {
     const youtube = google.youtube('v3');
     
-    // Create playlist
+    // create playlist
     const playlistResponse = await youtube.playlists.insert({
       part: 'snippet,status',
       requestBody: {
@@ -78,7 +69,7 @@ const createYouTubePlaylist = async (playlistName, videoIds, accessToken) => {
           description: 'Created by Moodify-AI',
         },
         status: {
-          privacyStatus: 'private', // Can be 'public', 'private', or 'unlisted'
+          privacyStatus: 'private', // can be 'public', 'private', or 'unlisted'
         },
       },
       access_token: accessToken,
@@ -86,7 +77,7 @@ const createYouTubePlaylist = async (playlistName, videoIds, accessToken) => {
 
     const playlistId = playlistResponse.data.id;
 
-    // Add videos to playlist
+    // add videos to playlist
     for (const videoId of videoIds) {
       try {
         await youtube.playlistItems.insert({
@@ -118,12 +109,9 @@ const createYouTubePlaylist = async (playlistName, videoIds, accessToken) => {
   }
 };
 
-/**
- * Create a playlist on Apple Music
- */
 const createAppleMusicPlaylist = async (playlistName, trackIds, userToken, developerToken) => {
   try {
-    // Create playlist
+    // create playlist
     const createResponse = await axios.post(
       `${APPLE_MUSIC_API_URL}/me/library/playlists`,
       {
@@ -143,7 +131,7 @@ const createAppleMusicPlaylist = async (playlistName, trackIds, userToken, devel
 
     const playlistId = createResponse.data.data[0].id;
 
-    // Add tracks to playlist
+    // add tracks to playlist
     if (trackIds.length > 0) {
       const tracksData = trackIds.map((trackId) => ({
         id: trackId,
@@ -176,9 +164,6 @@ const createAppleMusicPlaylist = async (playlistName, trackIds, userToken, devel
   }
 };
 
-/**
- * Generic handler for transferring a playlist to a service
- */
 const handleTransfer = async (req, res, service) => {
   const { playlistName, tracks } = req.body;
 
@@ -190,7 +175,7 @@ const handleTransfer = async (req, res, service) => {
     return res.status(400).json({ message: 'Tracks array is required' });
   }
 
-  // Check authentication
+  // check authentication
   const userAuthTokens = req.user.authTokens?.get(service);
   
   if (!userAuthTokens || !userAuthTokens.accessToken) {
@@ -213,7 +198,7 @@ const handleTransfer = async (req, res, service) => {
       totalTracks: tracks.length,
     });
 
-    // Search for each track
+    // search for each track
     for (let i = 0; i < tracks.length; i++) {
       const track = tracks[i];
       
@@ -230,7 +215,7 @@ const handleTransfer = async (req, res, service) => {
       let trackId = null;
       let success = false;
 
-      // Retry logic
+      // retry logic
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
           if (service === 'youtube') {
@@ -288,7 +273,7 @@ const handleTransfer = async (req, res, service) => {
       }
     }
 
-    // Create playlist
+    // create playlist
     broadcastUpdate({
       type: 'transfer_progress',
       userId: user._id.toString(),
@@ -352,25 +337,10 @@ const handleTransfer = async (req, res, service) => {
 
 // --- Exported Route Handlers ---
 
-/**
- * @desc    Transfer playlist to YouTube Music
- * @route   POST /api/transfer/youtube
- * @access  Protected
- */
 export const transferToYouTube = (req, res) => handleTransfer(req, res, 'youtube');
 
-/**
- * @desc    Transfer playlist to Apple Music
- * @route   POST /api/transfer/apple
- * @access  Protected
- */
 export const transferToApple = (req, res) => handleTransfer(req, res, 'apple');
 
-/**
- * @desc    Get transfer status
- * @route   GET /api/transfer/status
- * @access  Protected
- */
 export const getTransferStatus = async (req, res) => {
   try {
     const linkedServices = [];

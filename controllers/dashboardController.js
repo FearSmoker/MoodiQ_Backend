@@ -4,16 +4,6 @@ import SharedPlaylist from '../models/sharedPlaylistModel.js';
 import * as mlService from '../services/mlService.js';
 import { inferMoodFromFeatures } from './recommendationsController.js';
 
-/**
- * Dashboard Controller - Complete ML Integration v2.0
- * Uses HYBRID approach: Spotify API + ML Service
- */
-
-/**
- * @desc    Get comprehensive dashboard overview data
- * @route   GET /api/dashboard/overview
- * @access  Protected
- */
 export const getDashboardOverview = async (req, res) => {
   try {
     const user = req.user;
@@ -21,7 +11,7 @@ export const getDashboardOverview = async (req, res) => {
     const spotifyApi = new SpotifyWebApi();
     spotifyApi.setAccessToken(user.accessToken);
 
-    // Fetch data in parallel
+    // fetch data in parallel
     const [
       userPlaylists,
       topArtists,
@@ -31,7 +21,7 @@ export const getDashboardOverview = async (req, res) => {
       userProfile,
       userShares,
       currentlyPlaying,
-      liveSession  // NEW: Check for live session
+      liveSession  // nEW: Check for live session
     ] = await Promise.all([
       spotifyApi.getUserPlaylists(user.spotifyId, { limit: 50 }).catch(err => {
         console.warn('⚠️ getUserPlaylists failed:', err.message);
@@ -62,10 +52,10 @@ export const getDashboardOverview = async (req, res) => {
         return [];
       }),
       spotifyApi.getMyCurrentPlayingTrack().catch(() => null),
-      mlService.getCurrentLiveSession(user._id.toString()).catch(() => null)  // NEW
+      mlService.getCurrentLiveSession(user._id.toString()).catch(() => null)  // nEW
     ]);
 
-    // Calculate comprehensive statistics
+    // calculate comprehensive statistics
     const stats = {
       totalPlaylists: userPlaylists?.body?.total || 0,
       totalTracks: savedTracks?.body?.total || 0,
@@ -77,7 +67,7 @@ export const getDashboardOverview = async (req, res) => {
       recentlyPlayedCount: recentlyPlayed?.body?.items?.length || 0,
     };
 
-    // Genre analysis from top artists
+    // genre analysis from top artists
     const genreCount = {};
     (topArtists?.body?.items || []).forEach(artist => {
       if (artist?.genres) {
@@ -96,7 +86,7 @@ export const getDashboardOverview = async (req, res) => {
         percentage: (topArtists?.body?.items?.length || 0) > 0 ? Math.round((count / topArtists.body.items.length) * 100) : 0
       }));
 
-    // Recent activity with timestamps
+    // recent activity with timestamps
     const recentActivity = (recentlyPlayed?.body?.items || []).slice(0, 20).map(item => ({
       trackId: item?.track?.id,
       trackName: item?.track?.name || 'Unknown Track',
@@ -109,7 +99,7 @@ export const getDashboardOverview = async (req, res) => {
       externalUrl: item?.track?.external_urls?.spotify || '',
     }));
 
-    // Listening patterns (hourly distribution)
+    // listening patterns (hourly distribution)
     const hourlyActivity = Array(24).fill(0);
     (recentlyPlayed?.body?.items || []).forEach(item => {
       if (item?.played_at) {
@@ -120,7 +110,7 @@ export const getDashboardOverview = async (req, res) => {
 
     const peakHour = hourlyActivity.indexOf(Math.max(...hourlyActivity));
 
-    // Currently playing track with ML mood analysis
+    // currently playing track with ML mood analysis
     let nowPlaying = null;
     if (currentlyPlaying?.body?.item) {
       // `progress_ms` from Spotify is already the live current position;
@@ -130,7 +120,7 @@ export const getDashboardOverview = async (req, res) => {
       const progress = currentlyPlaying.body.progress_ms || 0;
 
       try {
-        // Get ML mood analysis for currently playing track
+        // get ML mood analysis for currently playing track
         const moodAnalysis = await mlService.analyzeCurrentlyPlaying(
           user.accessToken,
           user._id.toString()
@@ -150,7 +140,7 @@ export const getDashboardOverview = async (req, res) => {
             name: currentlyPlaying.body.device?.name,
             type: currentlyPlaying.body.device?.type,
           },
-          // ML mood analysis
+          // mL mood analysis
           mood: {
             fused_mood: moodAnalysis?.mood_analysis?.fused_mood || 'Unknown',
             confidence: moodAnalysis?.mood_analysis?.confidence || 0,
@@ -163,7 +153,7 @@ export const getDashboardOverview = async (req, res) => {
       } catch (mlError) {
         console.warn('⚠️ ML mood analysis unavailable for now playing:', mlError.message);
         
-        // Fallback: direct Spotify audio features + local rule engine
+        // fallback: direct Spotify audio features + local rule engine
         let inferredMood = 'Unknown';
         try {
           const featResponse = await spotifyApi.getAudioFeaturesForTracks([currentlyPlaying.body.item.id]);
@@ -175,7 +165,7 @@ export const getDashboardOverview = async (req, res) => {
           console.warn('⚠️ Fallback audio features failed in overview:', featErr.message);
         }
 
-        // Fallback: basic info with local rule-based mood
+        // fallback: basic info with local rule-based mood
         nowPlaying = {
           isPlaying: currentlyPlaying.body.is_playing,
           trackId: currentlyPlaying.body.item.id,
@@ -199,7 +189,7 @@ export const getDashboardOverview = async (req, res) => {
       }
     }
 
-    // Get user's ML learning stats
+    // get user's ML learning stats
     let mlStats = null;
     try {
       mlStats = await mlService.getUserLearningStats(user._id.toString());
@@ -207,7 +197,7 @@ export const getDashboardOverview = async (req, res) => {
       console.warn('⚠️ ML stats unavailable:', mlError.message);
     }
 
-    // Response data
+    // response data
     const dashboardData = {
       user: {
         id: user._id,
@@ -222,7 +212,7 @@ export const getDashboardOverview = async (req, res) => {
       },
       stats: {
         ...stats,
-        // Add ML personalization stats
+        // add ML personalization stats
         feedbackCount: mlStats?.feedback_count || 0,
         personalizationLevel: mlStats?.personalization_level || 'none',
         hasTrainedModel: mlStats?.has_trained_model || false,
@@ -316,16 +306,10 @@ export const getDashboardOverview = async (req, res) => {
   }
 };
 
-/**
- * @desc    Get detailed listening statistics with time ranges
- * @route   GET /api/dashboard/listening-stats
- * @access  Protected
- */
 export const getListeningStats = async (req, res) => {
   try {
     const user = req.user;
     const { timeRange = 'medium_term' } = req.query;
-
 
     const spotifyApi = new SpotifyWebApi();
     spotifyApi.setAccessToken(user.accessToken);
@@ -338,7 +322,7 @@ export const getListeningStats = async (req, res) => {
 
     const tracksCount = topTracks.body.items.length;
     
-    // Calculate listening patterns
+    // calculate listening patterns
     const listeningPatterns = {
       totalTracksPlayed: recentlyPlayed?.body?.items?.length || 0,
       uniqueArtists: new Set((recentlyPlayed?.body?.items || []).map(item => item?.track?.artists?.[0]?.id).filter(Boolean)).size,
@@ -353,7 +337,7 @@ export const getListeningStats = async (req, res) => {
       ) : 0,
     };
 
-    // Genre distribution
+    // genre distribution
     const genreCount = {};
     (topArtists?.body?.items || []).forEach(artist => {
       if (artist?.genres) {
@@ -372,7 +356,7 @@ export const getListeningStats = async (req, res) => {
         percentage: (topArtists?.body?.items?.length || 0) > 0 ? Math.round((count / topArtists.body.items.length) * 100) : 0 
       }));
 
-    // Listening time distribution (by hour and day)
+    // listening time distribution (by hour and day)
     const hourDistribution = Array(24).fill(0);
     const dayDistribution = Array(7).fill(0);
     
@@ -385,7 +369,6 @@ export const getListeningStats = async (req, res) => {
         dayDistribution[day]++;
       }
     });
-
 
     res.json({
       timeRange,
@@ -440,15 +423,9 @@ export const getListeningStats = async (req, res) => {
   }
 };
 
-/**
- * @desc    Get currently playing track with ML mood analysis
- * @route   GET /api/dashboard/now-playing
- * @access  Protected
- */
 export const getNowPlaying = async (req, res) => {
   try {
     const user = req.user;
-
 
     const spotifyApi = new SpotifyWebApi();
     spotifyApi.setAccessToken(user.accessToken);
@@ -457,7 +434,7 @@ export const getNowPlaying = async (req, res) => {
     let fallbackUsed = false;
 
     try {
-      // Use ML service's currently playing analysis (HYBRID)
+      
       nowPlayingAnalysis = await mlService.analyzeCurrentlyPlaying(
         user.accessToken,
         user._id.toString()
@@ -476,7 +453,7 @@ export const getNowPlaying = async (req, res) => {
       const item = currentlyPlaying.body.item;
       const trackId = item.id;
       
-      // Get audio features
+      // get audio features
       let features = null;
       try {
         const featResponse = await spotifyApi.getAudioFeaturesForTracks([trackId]);
@@ -485,7 +462,7 @@ export const getNowPlaying = async (req, res) => {
         console.warn('⚠️ Failed to get audio features for fallback:', featErr.message);
       }
       
-      // Infer mood
+      // infer mood
       const inferredMood = features ? inferMoodFromFeatures(features) : 'Unknown';
       
       nowPlayingAnalysis = {
@@ -526,7 +503,6 @@ export const getNowPlaying = async (req, res) => {
       });
     }
 
-    
     res.json({
       isPlaying: nowPlayingAnalysis.is_playing,
       track: {
@@ -572,24 +548,17 @@ export const getNowPlaying = async (req, res) => {
   }
 };
 
-/**
- * @desc    Get personalized music recommendations with ML
- * @route   GET /api/dashboard/recommendations
- * @access  Protected
- */
 export const getDashboardRecommendations = async (req, res) => {
   try {
     const user = req.user;
     const { limit = 20 } = req.query;
 
-
-    // Use ML service for personalized recommendations
+    // use ML service for personalized recommendations
     const recommendations = await mlService.generatePersonalizedPlaylist(
       user._id.toString(),
       user.accessToken,
       parseInt(limit)
     );
-
 
     res.json({
       recommendations: recommendations.tracks || [],

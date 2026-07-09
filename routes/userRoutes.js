@@ -20,57 +20,57 @@ import { protect } from '../middleware/authMiddleware.js';
 const router = express.Router();
 
 // ===============================================
-// User Preferences
+// user Preferences
 // ===============================================
 
 router.get('/preferences', protect, getPreferences);
 router.put('/preferences', protect, updatePreferences);
 
 // ===============================================
-// User Statistics
+// user Statistics
 // ===============================================
 
 router.get('/stats', protect, getUserStats);
 
 // ===============================================
-// ML Feedback & Learning
+// mL Feedback & Learning
 // ===============================================
 
-// Submit single feedback
+// submit single feedback
 router.post('/feedback', protect, submitFeedback);
 
-// Submit batch feedback
+// submit batch feedback
 router.post('/feedback/batch', protect, submitBatchFeedback);
 
-// Log user behavior (implicit learning)
+// log user behavior (implicit learning)
 router.post('/behavior', protect, logUserBehavior);
 
 // ===============================================
-// Personalization & Model Training
+// personalization & Model Training
 // ===============================================
 
-// Get personalized model info
+// get personalized model info
 router.get('/personalized-model', protect, getUserPersonalizedModel);
 
-// Trigger model retraining
+// trigger model retraining
 router.post('/retrain-model', protect, triggerModelRetrain);
 
-// Reset personalization
+// reset personalization
 router.delete('/reset-personalization', protect, resetUserPersonalization);
 
 // ===============================================
-// Voice/NLP Commands
+// voice/NLP Commands
 // ===============================================
 
 router.post('/voice-command', protect, handleVoiceCommand);
 
 // ===============================================
-// Playlist Sharing
+// playlist Sharing
 // ===============================================
 
 router.post('/share', protect, sharePlaylist);
 router.get('/shares', protect, getUserShares);
-router.get('/share/:shareId', getSharedPlaylist); // Public route
+router.get('/share/:shareId', getSharedPlaylist); // public route
 router.delete('/share/:shareId', protect, deleteShare);
 
 export default router;

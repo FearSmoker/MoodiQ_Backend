@@ -26,90 +26,83 @@ import { protect } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
-// All routes are protected
+// all routes are protected
 router.use(protect);
 
 // ===============================================
-// Basic Playlist Operations
+// basic Playlist Operations
 // ===============================================
 
-// Get user's playlists
+// get user's playlists
 router.get('/', getPlaylists);
 
-// Get specific playlist details
+// get specific playlist details
 router.get('/:id', getPlaylist);
 
-// Create new playlist
+// create new playlist
 router.post('/create', createPlaylist);
 
-// Reorder playlist tracks
+// reorder playlist tracks
 router.put('/:id/reorder', reorderPlaylist);
 
 // ===============================================
-// ML-Powered Mood Features (HYBRID APPROACH)
+
 // ===============================================
 
-// Analyze playlist mood using HYBRID approach
-// Uses: Spotify API + Multi-API Stack
+// uses: Spotify API + Multi-API Stack
 router.post('/mood', getPlaylistMood);
 
-// Analyze currently playing track (NEW - HYBRID)
-// Uses: Spotify currently-playing + Multi-API features
+// uses: Spotify currently-playing + Multi-API features
 router.get('/currently-playing', getCurrentlyPlayingMood);
 
-// Optimize playlist flow
+// optimize playlist flow
 router.post('/optimize', optimizePlaylistFlow);
 
-// Detect mood gaps
+// detect mood gaps
 router.post('/gaps', detectMoodGaps);
 
-// Fill mood gaps with recommendations
+// fill mood gaps with recommendations
 router.post('/fill-gaps', fillMoodGaps);
 
-// Fill mood gaps with targeted Spotify catalog bridging tracks (per-gap, returns augmentedTracks)
 router.post('/fill-gaps-smart', fillGapsWithSpotify);
 
-// AI-powered optimization: picks existing tracks that fit the arc + fills from Spotify catalog
 router.post('/optimize-enrich', optimizeAndEnrichFlow);
 
 // ===============================================
-// Playlist Generation (HYBRID SPOTIFY INTEGRATION)
+
 // ===============================================
 
-// Generate mood-based playlist
-// Uses: Spotify metadata + Last.fm recommendations
+// generate mood-based playlist
+// uses: Spotify metadata + Last.fm recommendations
 router.post('/generate/mood', generateMoodPlaylist);
 
-// Generate activity-based playlist
+// generate activity-based playlist
 router.post('/generate/activity', generateActivityPlaylist);
 
-// Generate from user's top tracks (NEW - SPOTIFY)
-// Uses: Spotify top tracks + Last.fm similar tracks
+// uses: Spotify top tracks + Last.fm similar tracks
 router.post('/generate/from-top-tracks', generateFromTopTracks);
 
-// Generate from recently played (NEW - SPOTIFY)
-// Uses: Spotify recently played + Last.fm recommendations
+// uses: Spotify recently played + Last.fm recommendations
 router.post('/generate/from-recently-played', generateFromRecentlyPlayed);
 
 // ===============================================
-// Recommendations (HYBRID)
+
 // ===============================================
 
-// Get personalized hybrid recommendations (ML-based, may be unavailable)
 router.post('/recommendations', getRecommendations);
 
 // ===============================================
-// Spotify-Native Features (no ML required)
+// spotify-Native Features (no ML required)
 // ===============================================
 
-// Get recommendations purely from Spotify top/recent tracks + audio features
-// Supports ?mood=Joyful&limit=30&valence=0.7&energy=0.8
+// get recommendations purely from Spotify top/recent tracks + audio features
+// supports ?mood=Joyful&limit=30&valence=0.7&energy=0.8
 router.get('/recommendations/spotify', getSpotifyRecommendations);
 
-// Direct Spotify playlist mood analysis (no ML dependency)
+// direct Spotify playlist mood analysis (no ML dependency)
 router.post('/analyze-direct', analyzePlaylistDirect);
 
-// Mood trends from recently played tracks (no ML history needed)
+// mood trends from recently played tracks (no ML history needed)
 router.get('/mood-from-recent', getMoodFromRecentlyPlayed);
 
 export default router;

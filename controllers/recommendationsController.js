@@ -8,7 +8,7 @@ const getSpotifyApi = (accessToken) => {
 };
 
 // =====================================================
-// MOOD → AUDIO FEATURE RANGES
+// mOOD → AUDIO FEATURE RANGES
 // =====================================================
 export const MOOD_FEATURE_MAP = {
   'Joyful':     { valence: [0.7, 1.0], energy: [0.5, 0.9], danceability: [0.5, 1.0] },
@@ -23,7 +23,7 @@ export const MOOD_FEATURE_MAP = {
   'Motivated':  { valence: [0.5, 0.85], energy: [0.65, 1.0], danceability: [0.55, 0.9] },
   'Angry':      { valence: [0.0, 0.4], energy: [0.7, 1.0], danceability: [0.3, 0.75] },
   'Ambient':    { valence: [0.3, 0.65], energy: [0.0, 0.35], danceability: [0.0, 0.45] },
-  // Legacy
+  // legacy
   'Happy':      { valence: [0.6, 1.0], energy: [0.5, 1.0], danceability: [0.5, 1.0] },
   'Sad':        { valence: [0.0, 0.4], energy: [0.0, 0.5], danceability: [0.0, 0.6] },
   'Calm':       { valence: [0.35, 0.7], energy: [0.0, 0.45], danceability: [0.2, 0.6] },
@@ -69,15 +69,15 @@ function matchesMood(features, moodName) {
 }
 
 // =====================================================
-// CATALOG DISCOVERY (replaces the deprecated /v1/recommendations call)
+// cATALOG DISCOVERY (replaces the deprecated /v1/recommendations call)
 // =====================================================
-// Spotify killed GET /v1/recommendations (and GET /v1/audio-features) for every
+
 // app that didn't already have "Extended Quota Mode" before Nov 27, 2024:
 // https://developer.spotify.com/blog/2024-11-27-changes-to-the-web-api
-// Calling those endpoints now just 403s silently (caught below), which is why
+// calling those endpoints now just 403s silently (caught below), which is why
 // "recommendations" used to quietly collapse into a re-sort of whatever was
 // already in trackMap (the user's own last ~30-150 top/recent tracks) — the
-// mood/valence/energy filters never actually removed or added anything because
+
 // there were no real audio features to filter on. GET /v1/search is NOT
 // deprecated, so we use genre-filtered catalog search to pull real, fresh
 // tracks from Spotify's full library instead.
@@ -94,7 +94,7 @@ const MOOD_GENRE_SEEDS = {
   'Motivated':   ['workout', 'power pop', 'rock'],
   'Angry':       ['metal', 'punk', 'hard rock'],
   'Ambient':     ['ambient', 'atmospheric', 'drone'],
-  // Legacy aliases
+  // legacy aliases
   'Happy':       ['pop', 'feel good'],
   'Sad':         ['sad', 'singer-songwriter'],
   'Calm':        ['acoustic', 'chill'],
@@ -112,7 +112,6 @@ function sample(arr, n) {
   return out;
 }
 
-// Pick the closest mood bucket to a valence/energy target when no mood chip was selected
 function pickMoodFromValenceEnergy(valence, energy) {
   if (valence == null && energy == null) return null;
   const v = valence ?? 0.5;
@@ -131,12 +130,6 @@ function pickMoodFromValenceEnergy(valence, energy) {
   return best;
 }
 
-/**
- * Pull real catalog tracks via genre-filtered search instead of the dead
- * /v1/recommendations endpoint. Random offsets mean repeated calls (e.g. the
- * "Get Recommendations" refresh button) surface different parts of the
- * catalog instead of the same fixed top results every time.
- */
 export async function searchCatalogForMood(spotifyApi, moodKey, count, excludeIds) {
   const genres = moodKey
     ? (MOOD_GENRE_SEEDS[moodKey] || [moodKey.toLowerCase()])
@@ -181,15 +174,14 @@ export async function searchCatalogForMood(spotifyApi, moodKey, count, excludeId
     }
   }
 
-  // Shuffle so results aren't strictly grouped by genre order
+  // shuffle so results aren't strictly grouped by genre order
   return sample(results, Math.min(count, results.length));
 }
 
 export async function getAudioFeaturesForTracks(spotifyApi, trackIds) {
   if (!trackIds || trackIds.length === 0) return {};
   const featureMap = {};
-  
-  // Filter out any track ID that is not a standard 22-character alphanumeric Spotify ID
+
   const cleanTrackIds = trackIds.filter(id => typeof id === 'string' && /^[a-zA-Z0-9]{22}$/.test(id));
   
   for (let i = 0; i < cleanTrackIds.length; i += 100) {
@@ -238,17 +230,12 @@ export async function getAudioFeaturesForTracks(spotifyApi, trackIds) {
   return featureMap;
 }
 
-/**
- * @desc    Spotify-native personalized recommendations
- * @route   GET /api/recommendations/spotify
- * @access  Protected
- */
 export const getSpotifyRecommendations = async (req, res) => {
   const { limit = 30, mood = null, energy = null, valence = null } = req.query;
   const user = req.user;
 
-  // Fix: cache key includes valence/energy so slider changes invalidate cache
-  // Fix: parseFloat(null) returns NaN, which is fine — we check with != null
+  // fix: cache key includes valence/energy so slider changes invalidate cache
+  // fix: parseFloat(null) returns NaN, which is fine — we check with != null
   const vParam = valence != null && valence !== '' ? parseFloat(valence) : null;
   const eParam = energy != null && energy !== '' ? parseFloat(energy) : null;
   const vKey = vParam != null ? Math.round(vParam * 10) : 'x';
@@ -265,7 +252,7 @@ export const getSpotifyRecommendations = async (req, res) => {
     console.log(`🎯 Spotify-native recommendations (mood: ${mood || 'any'}, valence: ${vParam}, energy: ${eParam}, limit: ${limit})`);
     const spotifyApi = getSpotifyApi(user.accessToken);
 
-    // Determine mood-based target features for Spotify /recommendations API
+    // determine mood-based target features for Spotify /recommendations API
     const targetMoodKey = mood
       ? Object.keys(MOOD_FEATURE_MAP).find(k => k.toLowerCase() === mood.toLowerCase()) || mood
       : null;
@@ -273,7 +260,7 @@ export const getSpotifyRecommendations = async (req, res) => {
       spotifyApi.getMyTopTracks({ limit: 50, time_range: 'short_term' }).catch(() => ({ body: { items: [] } })),
       spotifyApi.getMyTopTracks({ limit: 50, time_range: 'medium_term' }).catch(() => ({ body: { items: [] } })),
       spotifyApi.getMyRecentlyPlayedTracks({ limit: 50 }).catch(() => ({ body: { items: [] } })),
-      // Liked Songs — the user's actual saved library, not just recent listening
+      // liked Songs — the user's actual saved library, not just recent listening
       spotifyApi.getMySavedTracks({ limit: 50 }).catch(() => ({ body: { items: [] } })),
     ]);
 
@@ -296,8 +283,6 @@ export const getSpotifyRecommendations = async (req, res) => {
         trackMap.set(track.id, { ...track, source: 'recent', rank: 99 });
     });
 
-    // --- Majority of results now come from real catalog search, not the user's own history ---
-    // (see searchCatalogForMood comment above for why /v1/recommendations isn't used anymore)
     let discoveryTracks = [];
     try {
       const discoveryCount = Math.ceil(parseInt(limit) * 0.7); // catalog-driven, not history-driven
@@ -316,27 +301,19 @@ export const getSpotifyRecommendations = async (req, res) => {
       });
     }
 
-    // Fetch audio features for library tracks
+    // fetch audio features for library tracks
     const allTrackIds = Array.from(trackMap.keys());
     console.log(`🎵 Fetching audio features for ${allTrackIds.length} library tracks...`);
     const featureMap = await getAudioFeaturesForTracks(spotifyApi, allTrackIds);
 
-    // Fetch audio features for discovery tracks (works only for grandfathered/extended-quota apps —
-    // see the note above searchCatalogForMood. If this comes back empty, discovery tracks keep the
     // mood tag they were searched under instead of silently losing it.)
     const discTrackIds = discoveryTracks.map(t => t.id);
     const discFeatureMap = discTrackIds.length > 0
       ? await getAudioFeaturesForTracks(spotifyApi, discTrackIds).catch(() => ({}))
       : {};
 
-    // featuresAvailable is only true if Spotify actually returned real audio-features data.
-    // When it's false (the common case post Nov-2024 deprecation), we do NOT let the
-    // valence/energy/mood filters silently pass every track through — instead we rely on
-    // the genre-targeted catalog search having already fetched mood-appropriate tracks.
     const featuresAvailable = allTrackIds.length > 0 && Object.keys(featureMap).length > 0;
 
-    // Enrich discovery tracks with real features when available, otherwise keep the
-    // mood they were searched for (set in searchCatalogForMood) instead of nulling it out.
     discoveryTracks = discoveryTracks.map(t => ({
       ...t,
       features: discFeatureMap[t.id] || null,
@@ -359,8 +336,6 @@ export const getSpotifyRecommendations = async (req, res) => {
       rank: track.rank,
     }));
 
-    // Mood filter on library tracks — only applied when we actually have real feature data
-    // to filter on. Without this guard, every library track would silently "match" any mood.
     if (targetMoodKey && featuresAvailable) {
       enrichedTracks = enrichedTracks.filter(t => matchesMood(t.features, targetMoodKey));
       console.log(`🎭 Mood filter "${targetMoodKey}": ${enrichedTracks.length} library tracks match`);
@@ -368,7 +343,7 @@ export const getSpotifyRecommendations = async (req, res) => {
       console.log('⚠️ Audio features unavailable from Spotify — library tracks are not mood-filtered, relying on catalog search for mood accuracy');
     }
 
-    // Slider filter — only meaningful with real feature data
+    // slider filter — only meaningful with real feature data
     if ((vParam != null || eParam != null) && featuresAvailable) {
       const vTarget = vParam ?? 0.5;
       const eTarget = eParam ?? 0.5;
@@ -380,7 +355,7 @@ export const getSpotifyRecommendations = async (req, res) => {
       });
     }
 
-    // Score and sort library tracks
+    // score and sort library tracks
     const sourceScore = { top_short: 3, saved: 2.5, top_medium: 2, recent: 1 };
     enrichedTracks.sort((a, b) => {
       const aS = (sourceScore[a.source] || 0) * 10 + (a.popularity || 0) * 0.1 - a.rank;
@@ -388,8 +363,6 @@ export const getSpotifyRecommendations = async (req, res) => {
       return bS - aS;
     });
 
-    // Catalog search now supplies the majority of results so a mood/filter change actually
-    // changes most of what's shown, instead of just re-sorting the same ~30 recent tracks.
     const discoverySlice = discoveryTracks.slice(0, parseInt(limit));
     const librarySlice = enrichedTracks.slice(0, Math.max(0, parseInt(limit) - discoverySlice.length));
     const finalTracks = [...discoverySlice, ...librarySlice].slice(0, parseInt(limit));
@@ -429,12 +402,6 @@ export const getSpotifyRecommendations = async (req, res) => {
   }
 };
 
-/**
- * @desc    Analyze playlist directly via Spotify audio features + rule-based mood
-
- * @route   POST /api/recommendations/analyze-playlist
- * @access  Protected
- */
 export const analyzePlaylistDirect = async (req, res) => {
   const { playlistId } = req.body;
   if (!playlistId) return res.status(400).json({ message: 'playlistId is required' });
@@ -449,7 +416,7 @@ export const analyzePlaylistDirect = async (req, res) => {
     console.log(`🎵 Direct Spotify playlist analysis: ${playlistId}`);
     const spotifyApi = getSpotifyApi(user.accessToken);
 
-    // Fetch all tracks (paginate)
+    // fetch all tracks (paginate)
     const tracks = [];
     let offset = 0;
     const pageLimit = 100;
@@ -471,12 +438,12 @@ export const analyzePlaylistDirect = async (req, res) => {
       return res.json({ playlistId, tracks: [], total_tracks: 0, overallMood: 'Unknown', moodDistribution: {} });
     }
 
-    // Get audio features
+    // get audio features
     const trackIds = tracks.map(t => t.id);
     const featureMap = await getAudioFeaturesForTracks(spotifyApi, trackIds);
 
-    // GET /v1/audio-features is deprecated for apps without Extended Quota
-    // Mode (see getAudioFeaturesForTracks above) and typically 403s silently,
+    // gET /v1/audio-features is deprecated for apps without Extended Quota
+    // mode (see getAudioFeaturesForTracks above) and typically 403s silently,
     // returning an empty featureMap for every track. Without this check,
     // that reads as "we analyzed your playlist and every track is Unknown",
     // which looks like a real result instead of a degraded one.
@@ -485,7 +452,7 @@ export const analyzePlaylistDirect = async (req, res) => {
       console.warn('⚠️ Spotify audio-features API returned no usable data (likely deprecated/403 for this app). Direct playlist analysis will report all tracks as Unknown.');
     }
 
-    // Annotate with mood
+    // annotate with mood
     const moodDist = {};
     const analyzedTracks = tracks.map(track => {
       const features = featureMap[track.id] || null;
@@ -499,7 +466,7 @@ export const analyzePlaylistDirect = async (req, res) => {
         album: track.album,
         mood,
         features,
-        confidence: null, // No real confidence score in rule-based fallback
+        confidence: null, // no real confidence score in rule-based fallback
         source: 'spotify_direct'
       };
     });
@@ -525,9 +492,9 @@ export const analyzePlaylistDirect = async (req, res) => {
       analyzedAt: new Date().toISOString()
     };
 
-    // Don't cache a fully-degraded result — caching it would keep serving
+    // don't cache a fully-degraded result — caching it would keep serving
     // "all Unknown" for an hour even after the ML service (or Spotify's
-    // API) recovers.
+    // aPI) recovers.
     if (featuresAvailable) {
       await setInCache(cacheKey, result, 3600).catch(() => {});
     }
@@ -541,11 +508,6 @@ export const analyzePlaylistDirect = async (req, res) => {
   }
 };
 
-/**
- * @desc    Get mood trends from recently played + audio features (no ML history needed)
- * @route   GET /api/recommendations/mood-from-recent
- * @access  Protected
- */
 export const getMoodFromRecentlyPlayed = async (req, res) => {
   const user = req.user;
   try {
@@ -559,7 +521,7 @@ export const getMoodFromRecentlyPlayed = async (req, res) => {
       return res.json({ trends: [], moodDistribution: {}, overallMood: 'Unknown', totalTracks: 0, message: 'No recent listening history found' });
     }
 
-    // Get unique tracks
+    // get unique tracks
     const trackMap = new Map();
     items.forEach(item => {
       const t = item?.track;
@@ -569,7 +531,7 @@ export const getMoodFromRecentlyPlayed = async (req, res) => {
     const trackIds = Array.from(trackMap.keys());
     const featureMap = await getAudioFeaturesForTracks(spotifyApi, trackIds);
 
-    // Build mood timeline grouped by day
+    // build mood timeline grouped by day
     const dayMap = {};
     const moodDist = {};
 

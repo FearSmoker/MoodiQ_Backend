@@ -2,9 +2,6 @@ import jwt from 'jsonwebtoken';
 import User from '../models/userModel.js';
 import SpotifyWebApi from 'spotify-web-api-node';
 
-/**
- * Refresh Spotify access token if expired
- */
 const refreshSpotifyToken = async (user) => {
   try {
     console.log('🔄 Refreshing Spotify token for user:', user.displayName);
@@ -18,7 +15,7 @@ const refreshSpotifyToken = async (user) => {
     const data = await spotifyApi.refreshAccessToken();
     const { access_token, expires_in } = data.body;
     
-    // Update user in database
+    // update user in database
     user.accessToken = access_token;
     user.tokenExpires = new Date(Date.now() + expires_in * 1000);
     await user.save();
@@ -32,10 +29,6 @@ const refreshSpotifyToken = async (user) => {
   }
 };
 
-/**
- * Protect routes - verify JWT token and attach user to request
- * AUTO-REFRESHES expired Spotify tokens
- */
 export const protect = async (req, res, next) => {
   let token;
 
@@ -43,13 +36,13 @@ export const protect = async (req, res, next) => {
 
   if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
     try {
-      // Get token from header
+      // get token from header
       token = req.headers.authorization.split(' ')[1];
 
-      // Verify JWT token
+      // verify JWT token
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
       
-      // Get user from token
+      // get user from token
       req.user = await User.findById(decoded.id).select('-password');
       
       if (!req.user) {
@@ -65,7 +58,7 @@ export const protect = async (req, res, next) => {
       const tokenExpires = req.user.tokenExpires ? new Date(req.user.tokenExpires).getTime() : 0;
       const timeUntilExpiry = tokenExpires - now;
       
-      // Refresh if token expired or expires in less than 5 minutes
+      // refresh if token expired or expires in less than 5 minutes
       if (timeUntilExpiry < 5 * 60 * 1000) {
         console.log('⚠️ Spotify token expired or expiring soon, refreshing...');
         
@@ -119,9 +112,6 @@ export const protect = async (req, res, next) => {
   }
 };
 
-/**
- * Optional auth - doesn't fail if no token, but attaches user if valid token exists
- */
 export const optionalAuth = async (req, res, next) => {
   let token;
 
@@ -131,7 +121,7 @@ export const optionalAuth = async (req, res, next) => {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
       req.user = await User.findById(decoded.id).select('-password');
       
-      // Also check and refresh Spotify token if needed
+      // also check and refresh Spotify token if needed
       if (req.user) {
         const now = Date.now();
         const tokenExpires = req.user.tokenExpires ? new Date(req.user.tokenExpires).getTime() : 0;

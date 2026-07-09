@@ -9,23 +9,23 @@ import { protect } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
-// All routes are protected
+// all routes are protected
 router.use(protect);
 
 // ===============================================
-// Lyrics Endpoints
+// lyrics Endpoints
 // ===============================================
 
-// Get lyrics for a single track
+// get lyrics for a single track
 router.get('/track/:trackId', getTrackLyrics);
 
-// Analyze lyrics for multiple tracks
+// analyze lyrics for multiple tracks
 router.post('/analyze', analyzeLyrics);
 
-// Get lyrics with sentiment analysis
+// get lyrics with sentiment analysis
 router.post('/sentiment', getLyricsSentiment);
 
-// Search lyrics
+// search lyrics
 router.get('/search', searchLyrics);
 
 export default router;

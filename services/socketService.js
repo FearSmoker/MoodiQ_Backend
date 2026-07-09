@@ -8,32 +8,29 @@ import { inferMoodFromFeatures } from '../controllers/recommendationsController.
 let wssInstance;
 let pollingInterval;
 
-// Prevents overlapping polls for the same user (a poll that hasn't
+// prevents overlapping polls for the same user (a poll that hasn't
 // finished yet is skipped rather than queued, so slow requests never
 // pile up and cause drift).
 const activePolls = new Set();
 
-// Tuning knobs for real-time sync.
+// tuning knobs for real-time sync.
 const POLL_INTERVAL_MS = 500;   // how often we check Spotify per user
 const SEEK_THRESHOLD_MS = 1500; // gap between predicted & actual progress that counts as a seek
 const HEARTBEAT_MS = 4000;      // force a resync push at least this often even with no change
 
-// Per-user last-known playback state. Used to (a) predict where progress
+// per-user last-known playback state. Used to (a) predict where progress
 // "should" be so we can detect seeks/skips without extra API calls, and
 // (b) cache mood analysis per track so we don't re-run ML/audio-feature
 // analysis on every 500ms tick — only when the track actually changes.
 const userState = new Map();
 
-// Backs off polling for a user after repeated request failures (e.g. a
+// backs off polling for a user after repeated request failures (e.g. a
 // burst of 429 rate limits) instead of hammering Spotify at full speed
 // forever, which would only make the rate limiting worse and cause more
 // of the flicker this is meant to prevent.
-const failureState = new Map(); // userId -> { consecutiveFailures, cooldownUntil }
+const failureState = new Map(); 
 const MAX_BACKOFF_MS = 8000;
 
-/**
- * Initialize WebSocket service
- */
 export const initSocketService = (wss) => {
   wssInstance = wss;
   startBackgroundPolling();
@@ -61,7 +58,7 @@ export const initSocketService = (wss) => {
               userId: data.userId,
               timestamp: new Date().toISOString(),
             }));
-            // Immediately kick a poll for this user so a newly-opened
+            // immediately kick a poll for this user so a newly-opened
             // tab doesn't have to wait for the next interval tick.
             pollUserSafe(data.userId, { force: true });
             break;
@@ -80,9 +77,6 @@ export const initSocketService = (wss) => {
   });
 };
 
-/**
- * Broadcast update to all connected clients
- */
 export const broadcastUpdate = (data) => {
   if (!wssInstance) return;
 
@@ -99,9 +93,6 @@ export const broadcastUpdate = (data) => {
   });
 };
 
-/**
- * Send update to specific user
- */
 export const sendToUser = (userId, data) => {
   if (!wssInstance) return;
 
@@ -117,9 +108,6 @@ export const sendToUser = (userId, data) => {
   });
 };
 
-/**
- * Get connected clients count
- */
 export const getConnectedCount = () => {
   if (!wssInstance) return 0;
   return Array.from(wssInstance.clients).filter(
@@ -127,10 +115,6 @@ export const getConnectedCount = () => {
   ).length;
 };
 
-/**
- * Push a standardized now_playing_update to every socket subscribed
- * to this userId.
- */
 const pushNowPlaying = (userId, data) => {
   if (!wssInstance) return;
 
@@ -148,13 +132,6 @@ const pushNowPlaying = (userId, data) => {
   });
 };
 
-/**
- * Resolve mood for a track. Tries the ML service first (richer,
- * audio+lyrics fusion); falls back to a fast rule-based mood from raw
- * Spotify audio features if the ML service is slow/unavailable. This is
- * only ever called once per track (cached afterwards), so it never sits
- * in the hot per-tick polling path.
- */
 const resolveMoodForTrack = async (accessToken, userId, spotifyApi, trackItem) => {
   try {
     const analysis = await mlService.analyzeCurrentlyPlaying(accessToken, userId);
@@ -196,10 +173,6 @@ const resolveMoodForTrack = async (accessToken, userId, spotifyApi, trackItem) =
   }
 };
 
-/**
- * Persist the currently playing track to listening history (fire and
- * forget — never blocks the WebSocket push).
- */
 const recordListeningHistory = (userId, trackId, item, mood, audioFeatures, progressMs) => {
   const dayBucket = new Date().toISOString().slice(0, 10);
   ListeningHistory.findOneAndUpdate(
@@ -233,15 +206,6 @@ const recordListeningHistory = (userId, trackId, item, mood, audioFeatures, prog
   ).catch(() => {});
 };
 
-/**
- * Poll a single user's current playback and push a WS update whenever:
- *  - the track changed
- *  - play/pause state changed
- *  - a seek/skip within the same track was detected (position jumped
- *    further than what elapsed time would predict — this is what
- *    fixes "rewinding/scrubbing doesn't update the bar")
- *  - a heartbeat interval elapsed (keeps the bar from silently drifting)
- */
 const pollUser = async (userId, { force = false } = {}) => {
   const user = await User.findById(userId).select('accessToken displayName');
   if (!user || !user.accessToken) return;
@@ -271,7 +235,7 @@ const pollUser = async (userId, { force = false } = {}) => {
   }
   failureState.delete(userId);
 
-  // Nothing playing right now
+  // nothing playing right now
   if (!current || !current.body || !current.body.item) {
     if (force || (prev && prev.isPlaying)) {
       userState.set(userId, { trackId: null, isPlaying: false, progressMs: 0, lastPollAt: now, lastPushAt: now, mood: null, audioFeatures: null });
@@ -284,11 +248,11 @@ const pollUser = async (userId, { force = false } = {}) => {
   const trackId = item.id;
   const isPlaying = current.body.is_playing;
 
-  // IMPORTANT: `progress_ms` from Spotify is already the live, current
+  // iMPORTANT: `progress_ms` from Spotify is already the live, current
   // position — it does not need (and must not get) any elapsed-time
   // correction added to it. `timestamp` is "when playback state was
   // last changed" (play/pause/seek/skip), NOT "when this response was
-  // generated", so adding (now - timestamp) on top of progress_ms
+  
   // double-counts elapsed time and makes the bar drift further and
   // further ahead of real playback the longer it's been since the last
   // seek/play event. Trust progress_ms as-is.
@@ -297,7 +261,7 @@ const pollUser = async (userId, { force = false } = {}) => {
   const trackChanged = !prev || prev.trackId !== trackId;
   const playStateChanged = !prev || prev.isPlaying !== isPlaying;
 
-  // Predict where progress "should" be based on the last poll to detect
+  // predict where progress "should" be based on the last poll to detect
   // manual seeks/rewinds within the same track.
   let seekDetected = false;
   if (prev && !trackChanged && prev.isPlaying && isPlaying) {
@@ -307,7 +271,7 @@ const pollUser = async (userId, { force = false } = {}) => {
     }
   }
 
-  // Reuse cached mood/audio-features unless the track changed.
+  // reuse cached mood/audio-features unless the track changed.
   let mood = prev && !trackChanged ? prev.mood : null;
   let audioFeatures = prev && !trackChanged ? prev.audioFeatures : null;
   if (trackChanged || !mood) {
@@ -362,7 +326,7 @@ const pollUser = async (userId, { force = false } = {}) => {
     mood: standardizedMood,
     audioFeatures,
     device: current.body.device || null,
-    // Lets the client tell "this is a fresh authoritative position"
+    // lets the client tell "this is a fresh authoritative position"
     // (track change / seek / heartbeat) apart from a routine tick.
     seek: seekDetected || trackChanged,
   });
@@ -398,22 +362,22 @@ const startBackgroundPolling = () => {
 
     if (activeUserIds.size === 0) return;
 
-    // Poll every active user concurrently (not sequentially) so one
+    // poll every active user concurrently (not sequentially) so one
     // slow user never delays updates for everyone else.
     activeUserIds.forEach((userId) => pollUserSafe(userId));
   }, POLL_INTERVAL_MS);
 };
 
-// Example usage in other files:
+// example usage in other files:
 // import { broadcastUpdate, sendToUser } from './services/socketService.js';
-//
+
 // broadcastUpdate({
-//   type: 'playlist_analyzed',
-//   userId: '123',
-//   moods: ['Happy', 'Energetic']
+// type: 'playlist_analyzed',
+// userId: '123',
+// moods: ['Happy', 'Energetic']
 // });
-//
+
 // sendToUser('123', {
-//   type: 'notification',
-//   message: 'Your playlist is ready!'
+// type: 'notification',
+// message: 'Your playlist is ready!'
 // });

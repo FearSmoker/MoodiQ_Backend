@@ -17,7 +17,7 @@ const getFrontendUrl = () => {
 };
 
 // =================================================================
-// ### 1. Primary Authentication (Spotify) ###
+
 // =================================================================
 
 const spotifyScopes = [
@@ -36,18 +36,13 @@ const spotifyScopes = [
   'streaming',
 ];
 
-// Create a single Spotify API instance for auth operations
+// create a single Spotify API instance for auth operations
 const spotifyApi = new SpotifyWebApi({
   clientId: process.env.SPOTIFY_CLIENT_ID,
   clientSecret: process.env.SPOTIFY_CLIENT_SECRET,
   redirectUri: process.env.SPOTIFY_REDIRECT_URI,
 });
 
-/**
- * @desc    Initiate Spotify login
- * @route   GET /api/auth/login
- * @access  Public
- */
 export const login = (req, res) => {
   console.log('\n🔐 ========== SPOTIFY LOGIN INITIATED ==========');
   console.log('Timestamp:', new Date().toISOString());
@@ -56,7 +51,7 @@ export const login = (req, res) => {
   console.log('Spotify Redirect URI:', process.env.SPOTIFY_REDIRECT_URI);
   console.log('Frontend URL:', process.env.FRONTEND_URL);
   
-  // Update credentials dynamically before initiating login
+  // update credentials dynamically before initiating login
   spotifyApi.setClientId(process.env.SPOTIFY_CLIENT_ID);
   spotifyApi.setClientSecret(process.env.SPOTIFY_CLIENT_SECRET);
   spotifyApi.setRedirectURI(process.env.SPOTIFY_REDIRECT_URI);
@@ -69,7 +64,7 @@ export const login = (req, res) => {
     });
   }
 
-  // CRITICAL: Validate redirect URI matches environment
+  // cRITICAL: Validate redirect URI matches environment
   const configuredRedirectUri = process.env.SPOTIFY_REDIRECT_URI;
   if (!configuredRedirectUri) {
     console.error('❌ Invalid redirect URI configuration!');
@@ -80,13 +75,12 @@ export const login = (req, res) => {
   }
   
   try {
-    // Generate state for CSRF protection
+    // generate state for CSRF protection
     const state = Buffer.from(JSON.stringify({ 
       timestamp: Date.now(),
       random: Math.random().toString(36).substring(7)
     })).toString('base64');
-    
-    // Create authorization URL - set show_dialog to true for testing
+
     const authorizeURL = spotifyApi.createAuthorizeURL(spotifyScopes, state, true);
     
     console.log('✅ Authorization URL generated');
@@ -103,11 +97,6 @@ export const login = (req, res) => {
   }
 };
 
-/**
- * @desc    Handle Spotify callback
- * @route   GET /api/auth/callback
- * @access  Public
- */
 export const spotifyCallback = async (req, res) => {
   console.log('\n🔥 ========== SPOTIFY CALLBACK RECEIVED ==========');
   console.log('Timestamp:', new Date().toISOString());
@@ -119,38 +108,38 @@ export const spotifyCallback = async (req, res) => {
   const state = req.query.state || null;
   const frontendUrl = getFrontendUrl();
 
-  // User cancelled authorization
+  // user cancelled authorization
   if (error === 'access_denied') {
     console.log('❌ User cancelled authorization');
     return res.redirect(`${frontendUrl}/?cancelled=true`);
   }
 
-  // Check for any error
+  // check for any error
   if (error) {
     console.error('❌ Spotify returned error:', error);
     return res.redirect(`${frontendUrl}/?error=${error}&message=${encodeURIComponent('Authorization failed')}`);
   }
 
-  // No authorization code
+  // no authorization code
   if (!code) {
     console.error('❌ No authorization code received');
     console.error('Full query:', req.query);
     return res.redirect(`${frontendUrl}/?error=no_code&message=${encodeURIComponent('Authorization failed - no code received')}`);
   }
 
-  // Update credentials dynamically before callback code grant
+  // update credentials dynamically before callback code grant
   spotifyApi.setClientId(process.env.SPOTIFY_CLIENT_ID);
   spotifyApi.setClientSecret(process.env.SPOTIFY_CLIENT_SECRET);
   spotifyApi.setRedirectURI(process.env.SPOTIFY_REDIRECT_URI);
 
   try {
-    // Step 1: Exchange code for tokens
+    
     console.log('🔄 Step 1: Exchanging authorization code for tokens...');
     console.log('Using redirect URI:', process.env.SPOTIFY_REDIRECT_URI);
     console.log('Using client ID:', process.env.SPOTIFY_CLIENT_ID?.substring(0, 10) + '...');
     console.log('Code length:', code.length);
     
-    // CRITICAL: Use the same spotifyApi instance with credentials already set
+    // cRITICAL: Use the same spotifyApi instance with credentials already set
     const data = await spotifyApi.authorizationCodeGrant(code);
     
     const { access_token, refresh_token, expires_in } = data.body;
@@ -164,17 +153,14 @@ export const spotifyCallback = async (req, res) => {
     console.log('Refresh token length:', refresh_token.length);
     console.log('Token expires in:', expires_in, 'seconds');
 
-    // Step 2: Fetch user profile from Spotify
     console.log('🔄 Step 2: Fetching user profile from Spotify...');
     
-    // Create a new instance for API calls with the access token
+    // create a new instance for API calls with the access token
     const userApi = new SpotifyWebApi();
     userApi.setAccessToken(access_token);
-    
 
     const me = await userApi.getMe();
 
-    
     const spotifyId = me.body.id;
     const email = me.body.email;
     const displayName = me.body.display_name || 'Spotify User';
@@ -188,7 +174,6 @@ export const spotifyCallback = async (req, res) => {
     console.log('  - Email:', email);
     console.log('  - Product:', product);
 
-    // Step 3: Create or update user in database
     console.log('🔄 Step 3: Saving user to database...');
     
     const tokenExpiry = new Date(Date.now() + expires_in * 1000);
@@ -199,7 +184,7 @@ export const spotifyCallback = async (req, res) => {
       console.log('🔄 Updating existing user in database...');
       console.log('  - Existing user ID:', user._id);
       
-      // Update user
+      // update user
       user.accessToken = access_token;
       user.refreshToken = refresh_token;
       user.tokenExpires = tokenExpiry;
@@ -235,12 +220,10 @@ export const spotifyCallback = async (req, res) => {
       console.log('  - New user ID:', user._id);
     }
 
-    // Step 4: Generate JWT token for our app
     console.log('🔄 Step 4: Generating JWT token...');
     const jwtToken = generateToken(user._id);
     console.log('✅ JWT token generated');
 
-    // Step 5: Redirect to frontend with token
     const redirectUrl = `${frontendUrl}/auth/callback?token=${jwtToken}`;
     console.log('🔄 Step 5: Redirecting to frontend...');
     console.log('✅ ========== AUTH SUCCESS ==========');
@@ -255,7 +238,7 @@ export const spotifyCallback = async (req, res) => {
     console.error('Error message:', err.message);
     console.error('Error stack:', err.stack);
     
-    // Log detailed error info from Spotify
+    // log detailed error info from Spotify
     if (err.body) {
       console.error('Spotify Error Body:', JSON.stringify(err.body, null, 2));
     }
@@ -270,7 +253,7 @@ export const spotifyCallback = async (req, res) => {
       console.error('Spotify Status Code:', err.statusCode);
     }
     
-    // Determine specific error message
+    // determine specific error message
     let errorMsg = 'Authentication failed';
     let errorCode = 'auth_failed';
     
@@ -300,11 +283,6 @@ export const spotifyCallback = async (req, res) => {
   }
 };
 
-/**
- * @desc    Refresh Spotify access token
- * @route   POST /api/auth/refresh
- * @access  Protected
- */
 export const refreshToken = async (req, res) => {
   const { refreshToken } = req.body;
   
@@ -317,7 +295,7 @@ export const refreshToken = async (req, res) => {
   try {
     console.log('Attempting to refresh token...');
     
-    // Create a new API instance with refresh token
+    // create a new API instance with refresh token
     const refreshApi = new SpotifyWebApi({
       clientId: process.env.SPOTIFY_CLIENT_ID,
       clientSecret: process.env.SPOTIFY_CLIENT_SECRET,
@@ -329,7 +307,7 @@ export const refreshToken = async (req, res) => {
     
     console.log('✅ Token refreshed successfully');
     
-    // Update user in database
+    // update user in database
     const user = await User.findOneAndUpdate(
       { refreshToken }, 
       {
@@ -361,11 +339,6 @@ export const refreshToken = async (req, res) => {
   }
 };
 
-/**
- * @desc    Get logged in user's details
- * @route   GET /api/auth/me
- * @access  Protected
- */
 export const getMe = async (req, res) => {
   try {
     console.log('📋 Fetching user details for:', req.user._id);
@@ -377,7 +350,7 @@ export const getMe = async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // Prepare user data response
+    // prepare user data response
     const userData = {
       _id: user._id,
       spotifyId: user.spotifyId,
@@ -409,7 +382,7 @@ export const getMe = async (req, res) => {
 };
 
 // =================================================================
-// ### 2. Secondary Service Linking (Protected Routes) ###
+
 // =================================================================
 
 const googleOAuth2Client = new google.auth.OAuth2(

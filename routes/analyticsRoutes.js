@@ -14,38 +14,38 @@ import { protect } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
-// All analytics routes are protected
+// all analytics routes are protected
 router.use(protect);
 
 // ===============================================
-// Analytics Endpoints - Complete Integration
+
 // ===============================================
 
-// Mood trends over time (12-mood system)
+// mood trends over time (12-mood system)
 router.get('/mood-trends', getMoodTrends);
 
-// Mood distribution analysis
+// mood distribution analysis
 router.get('/mood-distribution', getMoodDistribution);
 
-// Mood pattern co-occurrence
+// mood pattern co-occurrence
 router.get('/mood-patterns', getMoodPatterns);
 
-// Listening activity patterns
+// listening activity patterns
 router.get('/activity', getActivityAnalytics);
 
-// Genre analysis
+// genre analysis
 router.get('/genres', getGenreAnalysis);
 
-// User mood timeline (PRIMARY ENDPOINT for graphs)
+// user mood timeline (PRIMARY ENDPOINT for graphs)
 router.get('/mood-timeline', getMoodTimeline);
 
-// Real-time current track analysis
+// real-time current track analysis
 router.get('/realtime', getRealtimeAnalysis);
 
-// Global mood trends
+// global mood trends
 router.get('/global-trends', getGlobalMoodTrends);
 
-// Live listening session analytics
+// live listening session analytics
 router.get('/live-session/:userId', getLiveSessionAnalytics);
 
 export default router;

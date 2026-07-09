@@ -5,7 +5,7 @@ import dotenv from 'dotenv';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 
-// Load routes
+// load routes
 import authRoutes from './routes/authRoutes.js';
 import playlistRoutes from './routes/playlistRoutes.js';
 import transferRoutes from './routes/transferRoutes.js';
@@ -15,13 +15,13 @@ import analyticsRoutes from './routes/analyticsRoutes.js';
 import liveListeningRoutes from './routes/LiveListeningRoutes.js';
 import lyricsRoutes from './routes/lyricsRoutes.js';
 
-// Load services
+// load services
 import { initSocketService } from './services/socketService.js';
 import { connectRedis } from './services/cacheService.js';
 import * as mlService from './services/mlService.js';
 
-// Config
-// Load environment variables (.env.development in development, .env otherwise)
+// config
+
 if (process.env.NODE_ENV === 'development') {
   dotenv.config({ path: '.env.development' });
 } else {
@@ -32,7 +32,7 @@ const app = express();
 const server = createServer(app);
 const PORT = process.env.PORT || 3000;
 
-// CORS Configuration
+// cORS Configuration
 const corsOptions = {
   origin: function (origin, callback) {
     if (!origin) return callback(null, true);
@@ -59,7 +59,7 @@ app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Request logging middleware (skip health checks)
+// request logging middleware (skip health checks)
 app.use((req, res, next) => {
   if (req.path !== '/health' && req.path !== '/favicon.ico') {
     console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
@@ -67,7 +67,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Health check route with ML service status
+// health check route with ML service status
 app.get('/health', async (req, res) => {
   const mlHealth = await mlService.checkHealth();
   
@@ -83,12 +83,12 @@ app.get('/health', async (req, res) => {
   });
 });
 
-// Favicon route
+// favicon route
 app.get('/favicon.ico', (req, res) => {
   res.status(204).end();
 });
 
-// API Routes
+// aPI Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/playlists', playlistRoutes);
 app.use('/api/transfer', transferRoutes);
@@ -98,7 +98,7 @@ app.use('/api/live', liveListeningRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/lyrics', lyricsRoutes);  // ✅ FIXED: was missing, caused all lyrics to 404
 
-// Root route
+// root route
 app.get('/', (req, res) => {
   res.json({
     name: 'MoodiQ-AI Backend API',
@@ -139,7 +139,7 @@ app.use((req, res) => {
   });
 });
 
-// Error handling middleware
+// error handling middleware
 app.use((err, req, res, next) => {
   console.error('Error:', err.stack);
   
@@ -149,7 +149,7 @@ app.use((err, req, res, next) => {
   });
 });
 
-// WebSocket Server
+// webSocket Server
 const wss = new WebSocketServer({ 
   server,
   path: '/ws',
@@ -158,13 +158,13 @@ const wss = new WebSocketServer({
 initSocketService(wss);
 console.log('✅ WebSocket server initialized on /ws');
 
-// Connect to MongoDB
+// connect to MongoDB
 mongoose.connect(process.env.MONGO_URI)
   .then(async () => {
     console.log('✅ Connected to MongoDB');
     console.log('📊 Database:', mongoose.connection.name);
     
-    // Connect to Redis (optional)
+    // connect to Redis (optional)
     if (process.env.ENABLE_CACHE === 'true' && process.env.REDIS_URL) {
       connectRedis()
         .then((client) => {
@@ -180,7 +180,7 @@ mongoose.connect(process.env.MONGO_URI)
       console.log('ℹ️ Redis caching disabled');
     }
     
-    // Check ML service availability
+    // check ML service availability
     console.log('🤖 Checking ML service...');
     const mlHealth = await mlService.checkHealth();
     if (mlHealth.available) {
@@ -191,7 +191,7 @@ mongoose.connect(process.env.MONGO_URI)
       console.warn('   Some features may be limited');
     }
     
-    // Start server
+    // start server
     server.listen(PORT, () => {
       console.log('\n' + '='.repeat(60));
       console.log('🚀 MoodiQ-AI Backend Server Started');
@@ -226,7 +226,7 @@ mongoose.connect(process.env.MONGO_URI)
     process.exit(1);
   });
 
-// Graceful shutdown
+// graceful shutdown
 const gracefulShutdown = () => {
   console.log('\n🛑 Shutting down gracefully...');
   

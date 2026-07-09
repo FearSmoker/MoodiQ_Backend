@@ -17,15 +17,6 @@ const getSpotifyApi = (accessToken) => {
   return spotifyApi;
 };
 
-/**
- * Maps the mood names shown in the FlowOptimizer dropdown (MOOD_OPTIONS in
- * FlowOptimizer.jsx) to approximate {valence, energy, danceability} scores.
- * The Python /optimize/flow endpoint (optimize_router.py) requires
- * start_mood/end_mood as Dict[str, float] — it cannot accept a bare mood
- * name string. Without this conversion, every optimize request fails
- * Pydantic validation (422) and the frontend just shows a generic
- * "Failed to optimize flow" toast.
- */
 const MOOD_PROFILES = {
   joyful:      { valence: 0.85, energy: 0.70, danceability: 0.70 },
   excited:     { valence: 0.80, energy: 0.85, danceability: 0.75 },
@@ -41,17 +32,11 @@ const MOOD_PROFILES = {
   ambient:     { valence: 0.50, energy: 0.15, danceability: 0.20 },
 };
 
-/**
- * Normalizes a mood value coming from the frontend into the
- * {valence, energy, danceability} shape the ML service expects.
- * Accepts a mood name string (current frontend behavior), a feature
- * dict already in the right shape, or null/undefined.
- */
 const resolveMoodProfile = (moodValue) => {
   if (!moodValue) return null;
 
   if (typeof moodValue === 'object') {
-    // Already a feature dict (e.g. {valence, energy, danceability})
+    // already a feature dict (e.g. {valence, energy, danceability})
     return moodValue;
   }
 
@@ -65,23 +50,6 @@ const resolveMoodProfile = (moodValue) => {
   return null;
 };
 
-/**
- * Reconciles two known track shapes into the one FlowOptimizer.jsx actually
- * reads (`track.mood` as a string, `track.features.{valence,energy,...}`,
- * `track.artists` as an array, `track.album.images` as an array):
- *
- *  - ML hybrid path (mlService.analyzeSpotifyPlaylist → Python
- *    /predict/spotify/playlist): tracks come back as
- *    { id, artist: "Name", album: "Title", images: [...],
- *      moodDetails: { primary_mood, scores: {valence, energy, ...} }, ... }
- *  - Direct fallback path (recommendationsController.analyzePlaylistDirect):
- *    tracks come back as
- *    { id, artists: [{name}], album: {images:[]}, mood: "Chill",
- *      features: {valence, energy, ...} }
- *
- * Without full normalization FlowOptimizer silently shows "Unknown Artist" and
- * no cover art for every track coming via the ML hybrid path.
- */
 const normalizeTrackForFlow = (track) => {
   if (!track) return track;
 
@@ -95,7 +63,7 @@ const normalizeTrackForFlow = (track) => {
   const features = track.features || track.moodDetails?.scores || null;
 
   // ── artists array  ────────────────────────────────────────────────────────
-  // ML hybrid path returns { artist: "Name" }; direct path returns
+  
   // { artists: [{name: "Name"}, ...] }. Normalise to the latter.
   let artists = track.artists;
   if (!Array.isArray(artists) || artists.length === 0) {
@@ -104,12 +72,12 @@ const normalizeTrackForFlow = (track) => {
   }
 
   // ── album / cover art ─────────────────────────────────────────────────────
-  // ML hybrid path returns { album: "Album Title", images: [{url, ...}] }.
-  // Direct path returns { album: { name, images: [...] } }.
-  // Normalise to { album: { name: string, images: [...] } }.
+  
+  // direct path returns { album: { name, images: [...] } }.
+  // normalise to { album: { name: string, images: [...] } }.
   let album = track.album;
   if (typeof album === 'string' || !album) {
-    // ML path: album is the album name string; images are at top level
+    // mL path: album is the album name string; images are at top level
     album = {
       name: typeof album === 'string' ? album : '',
       images: Array.isArray(track.images) ? track.images : [],
@@ -121,12 +89,6 @@ const normalizeTrackForFlow = (track) => {
   return { ...track, mood, features, artists, album };
 };
 
-
-/**
- * @desc    Get user's playlists
- * @route   GET /api/playlists
- * @access  Protected
- */
 export const getPlaylists = async (req, res) => {
   try {
     const spotifyApi = getSpotifyApi(req.user.accessToken);
@@ -150,11 +112,6 @@ export const getPlaylists = async (req, res) => {
   }
 };
 
-/**
- * @desc    Get a specific playlist with tracks
- * @route   GET /api/playlists/:id
- * @access  Protected
- */
 export const getPlaylist = async (req, res) => {
   const { id } = req.params;
 
@@ -177,11 +134,6 @@ export const getPlaylist = async (req, res) => {
   }
 };
 
-/**
- * @desc    Analyze playlist mood using ML API (HYBRID APPROACH)
- * @route   POST /api/playlists/mood
- * @access  Protected
- */
 export const getPlaylistMood = async (req, res) => {
   const { playlistId } = req.body;
   const user = req.user;
@@ -192,7 +144,7 @@ export const getPlaylistMood = async (req, res) => {
   }
 
   try {
-    // Check cache first
+    // check cache first
     const cachedData = await getFromCache(cacheKey).catch(() => null);
     if (cachedData) {
       console.log('✅ Returning cached mood data');
@@ -204,7 +156,6 @@ export const getPlaylistMood = async (req, res) => {
     let result = null;
     let mlFailed = false;
 
-    // 1. Try ML service first
     try {
       const moodResponse = await mlService.analyzeSpotifyPlaylist(
         playlistId,
@@ -229,10 +180,9 @@ export const getPlaylistMood = async (req, res) => {
       mlFailed = true;
     }
 
-    // 2. Fallback: direct Spotify audio features + rule-based mood (no ML required)
     if (mlFailed || !result) {
       console.log('🎵 Running direct Spotify playlist analysis...');
-      // Simulate a req/res pair to reuse analyzePlaylistDirect
+      // simulate a req/res pair to reuse analyzePlaylistDirect
       const fakeReq = { body: { playlistId }, user };
       let directResult = null;
       const fakeRes = {
@@ -254,14 +204,13 @@ export const getPlaylistMood = async (req, res) => {
       });
     }
 
-    // Normalize track shape once, regardless of whether ML hybrid or the
     // direct fallback produced it, so every downstream consumer
     // (FlowOptimizer, MoodCloud, detectMoodGaps, etc.) sees the same shape.
     if (Array.isArray(result.tracks)) {
       result.tracks = result.tracks.map(normalizeTrackForFlow);
     }
 
-    // Cache the result — but not if it's a degraded fallback (no audio
+    // cache the result — but not if it's a degraded fallback (no audio
     // features available), since that would keep serving an "all Unknown"
     // analysis for the full TTL even after the ML service or Spotify's API
     // recovers.
@@ -269,7 +218,7 @@ export const getPlaylistMood = async (req, res) => {
       await setInCache(cacheKey, result, CACHE_TTL.MOOD_ANALYSIS).catch(() => {});
     }
 
-    // Send real-time update
+    // send real-time update
     try {
       broadcastUpdate({
         type: 'playlist_analyzed',
@@ -299,18 +248,12 @@ export const getPlaylistMood = async (req, res) => {
   }
 };
 
-/**
- * @desc    Analyze currently playing track (HYBRID APPROACH)
- * @route   GET /api/playlists/currently-playing
- * @access  Protected
- */
 export const getCurrentlyPlayingMood = async (req, res) => {
   const user = req.user;
 
   try {
     console.log('🎧 Analyzing currently playing track (HYBRID)...');
-    
-    // Use ML Service HYBRID approach
+
     const analysis = await mlService.analyzeCurrentlyPlaying(
       user.accessToken,
       user._id.toString()
@@ -337,7 +280,7 @@ export const getCurrentlyPlayingMood = async (req, res) => {
       });
     }
     
-    // Return a graceful 200 fallback for 503 / 500 or connection errors
+    // return a graceful 200 fallback for 503 / 500 or connection errors
     return res.json({
       is_playing: false,
       message: `Currently playing mood temporarily unavailable (${err.message})`
@@ -345,11 +288,6 @@ export const getCurrentlyPlayingMood = async (req, res) => {
   }
 };
 
-/**
- * @desc    Optimize playlist flow for smooth transitions
- * @route   POST /api/playlists/optimize
- * @access  Protected
- */
 export const optimizePlaylistFlow = async (req, res) => {
   const { tracks, startMood, endMood, algorithm } = req.body;
 
@@ -360,8 +298,8 @@ export const optimizePlaylistFlow = async (req, res) => {
   try {
     console.log(`🔄 Optimizing playlist flow with ${tracks.length} tracks using ${algorithm || 'dynamic_programming'}`);
 
-    // Frontend sends mood NAMES (e.g. "Chill", "Joyful") from the
-    // FlowOptimizer dropdowns. The ML service needs feature score dicts.
+    // frontend sends mood NAMES (e.g. "Chill", "Joyful") from the
+    // flowOptimizer dropdowns. The ML service needs feature score dicts.
     const startMoodProfile = resolveMoodProfile(startMood);
     const endMoodProfile = resolveMoodProfile(endMood);
 
@@ -405,15 +343,9 @@ export const optimizePlaylistFlow = async (req, res) => {
   }
 };
 
-/**
- * @desc    Detect mood gaps in playlist
- * @route   POST /api/playlists/gaps
- * @access  Protected
- */
 export const detectMoodGaps = async (req, res) => {
-  // NOTE: threshold is euclidean distance in 2D valence/energy space.
-  // Max possible distance is √((1-0)²+(1-0)²) = √2 ≈ 1.414.
-  // The old default of 1.5 was impossible — no gap was ever detected.
+  // nOTE: threshold is euclidean distance in 2D valence/energy space.
+
   // 0.3 means a meaningful discontinuity (≈21% of the full range on both axes).
   const { tracks, threshold = 0.3 } = req.body;
 
@@ -468,7 +400,7 @@ export const detectMoodGaps = async (req, res) => {
       total_gaps: gaps.length,
       threshold,
       tracks_missing_features: tracksMissingFeatures,
-      // True if literally none of the tracks had usable mood/feature data,
+      // true if literally none of the tracks had usable mood/feature data,
       // as opposed to genuinely having no gaps.
       analysis_incomplete: tracksMissingFeatures === tracks.length - 1 && tracks.length > 1
     });
@@ -479,11 +411,6 @@ export const detectMoodGaps = async (req, res) => {
   }
 };
 
-/**
- * @desc    Fill mood gaps with recommendations
- * @route   POST /api/playlists/fill-gaps
- * @access  Protected
- */
 export const fillMoodGaps = async (req, res) => {
   const { tracks } = req.body;
 
@@ -522,15 +449,6 @@ export const fillMoodGaps = async (req, res) => {
   }
 };
 
-/**
- * @desc    Fill mood gaps with TARGETED Spotify catalog tracks for each gap
- * @route   POST /api/playlists/fill-gaps-smart
- * @access  Protected
- *
- * Preserves the original mood trajectory (start→end of the original playlist).
- * Detects abrupt transitions, inserts one bridge track per gap from the Spotify
- * catalog, and returns BOTH the augmented track list AND per-gap metadata.
- */
 export const fillGapsWithSpotify = async (req, res) => {
   const { tracks, threshold = 0.3 } = req.body;
 
@@ -653,19 +571,6 @@ export const fillGapsWithSpotify = async (req, res) => {
   }
 };
 
-/**
- * @desc    Optimize playlist by building a smooth mood arc from startMood → endMood
- * @route   POST /api/playlists/optimize-enrich
- * @access  Protected
- *
- * Algorithm:
- *  1. Generate N equally-spaced waypoints along the startMood → endMood arc.
- *  2. Greedily assign existing tracks (that have audio features) to the nearest waypoint.
- *  3. If < 30% of waypoints are covered by existing tracks → generate a FRESH playlist
- *     from the Spotify catalog across the full arc ("mode: generated").
- *  4. Otherwise, fill remaining waypoints with Spotify catalog bridge tracks ("mode: enriched").
- *  5. Sort by arc projection and return.
- */
 export const optimizeAndEnrichFlow = async (req, res) => {
   const { tracks, startMood, endMood } = req.body;
 
@@ -684,10 +589,9 @@ export const optimizeAndEnrichFlow = async (req, res) => {
       return res.status(400).json({ message: `Unknown mood: ${!sP ? startMood : endMood}` });
     }
 
-    // Target playlist length — keep original count, min 10, max 30
+    // target playlist length — keep original count, min 10, max 30
     const targetCount = Math.min(30, Math.max(tracks.length, 10));
 
-    // ── Generate N waypoints along the arc ───────────────────────────────────
     const waypoints = Array.from({ length: targetCount }, (_, i) => {
       const t = i / Math.max(targetCount - 1, 1);
       return {
@@ -697,12 +601,11 @@ export const optimizeAndEnrichFlow = async (req, res) => {
       };
     });
 
-    // ── Match existing tracks to waypoints ───────────────────────────────────
     const withFeatures = tracks.filter(t => t.features?.valence != null);
     const THRESHOLD = 0.4;
     const usedIds = new Set();
-    const assigned = [];   // { track, waypointIndex }
-    const bridges  = [];   // waypoints with no existing match
+    const assigned = [];   
+    const bridges  = [];   
 
     for (const wp of waypoints) {
       let best = null, bestDist = THRESHOLD;
@@ -731,7 +634,7 @@ export const optimizeAndEnrichFlow = async (req, res) => {
 
     if (mode === 'generated') {
       // ── No enough existing tracks fit the arc → generate fresh ──────────────
-      // Divide arc into segments, search Spotify for each segment
+      // divide arc into segments, search Spotify for each segment
       const segCount = Math.max(2, Math.ceil(targetCount / 5));
       const tracksPerSeg = Math.ceil(targetCount / segCount);
 
@@ -765,7 +668,7 @@ export const optimizeAndEnrichFlow = async (req, res) => {
       finalTracks = sortByMoodArc(finalTracks, sP, eP);
 
     } else {
-      // ── Enrich: fill bridge waypoints from Spotify catalog ──────────────────
+      
       for (const bridge of bridges) {
         const moodName = pickClosestMoodName(bridge);
         const raw = await searchCatalogForMood(spotifyApi, moodName, 10, seenIds).catch(() => []);
@@ -819,13 +722,6 @@ export const optimizeAndEnrichFlow = async (req, res) => {
   }
 };
 
-
-/**
- * @desc    Generate mood-based playlist (HYBRID)
- * @route   POST /api/playlists/generate/mood
- * @access  Protected
- */
-
 export const generateMoodPlaylist = async (req, res) => {
   const { targetMood, limit = 20, seedTrackId } = req.body;
 
@@ -862,11 +758,6 @@ export const generateMoodPlaylist = async (req, res) => {
   }
 };
 
-/**
- * @desc    Generate activity-based playlist (HYBRID)
- * @route   POST /api/playlists/generate/activity
- * @access  Protected
- */
 export const generateActivityPlaylist = async (req, res) => {
   const { activity, limit = 20, seedTrackId } = req.body;
 
@@ -903,11 +794,6 @@ export const generateActivityPlaylist = async (req, res) => {
   }
 };
 
-/**
- * @desc    Generate from user's top tracks (HYBRID SPOTIFY INTEGRATION)
- * @route   POST /api/playlists/generate/from-top-tracks
- * @access  Protected
- */
 export const generateFromTopTracks = async (req, res) => {
   const { targetMood, limit = 20, timeRange = 'medium_term' } = req.body;
 
@@ -940,11 +826,6 @@ export const generateFromTopTracks = async (req, res) => {
   }
 };
 
-/**
- * @desc    Generate from recently played (HYBRID SPOTIFY INTEGRATION)
- * @route   POST /api/playlists/generate/from-recently-played
- * @access  Protected
- */
 export const generateFromRecentlyPlayed = async (req, res) => {
   const { targetMood, limit = 20 } = req.body;
 
@@ -976,11 +857,6 @@ export const generateFromRecentlyPlayed = async (req, res) => {
   }
 };
 
-/**
- * @desc    Get personalized recommendations (HYBRID)
- * @route   POST /api/playlists/recommendations
- * @access  Protected
- */
 export const getRecommendations = async (req, res) => {
   const { limit = 20 } = req.body;
   const user = req.user;
@@ -1019,11 +895,6 @@ export const getRecommendations = async (req, res) => {
   }
 };
 
-/**
- * @desc    Create a new playlist on Spotify
- * @route   POST /api/playlists/create
- * @access  Protected
- */
 export const createPlaylist = async (req, res) => {
   const { name, description, trackUris, isPublic } = req.body;
 
@@ -1073,11 +944,6 @@ export const createPlaylist = async (req, res) => {
   }
 };
 
-/**
- * @desc    Update playlist order
- * @route   PUT /api/playlists/:id/reorder
- * @access  Protected
- */
 export const reorderPlaylist = async (req, res) => {
   const { id } = req.params;
   const { trackUris } = req.body;
