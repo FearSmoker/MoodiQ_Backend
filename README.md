@@ -8,64 +8,58 @@ A Node.js REST API and WebSocket server that orchestrates Spotify OAuth, playlis
 
 ```mermaid
 graph TD
+    %% Clients
     Frontend["React Frontend (Vite)"]
-    WS["WebSocket Client"]
+    WSClient["WebSocket Client"]
 
-    subgraph Backend ["Backend (Node.js + Express)"]
-        Server["server.js (Express App + HTTP Server)"]
+    %% Entry
+    Server["server.js (Express App + HTTP Server)"]
 
-        subgraph Routes ["API Routes"]
-            AuthR["/api/auth"]
-            PlaylistR["/api/playlists"]
-            DashboardR["/api/dashboard"]
-            AnalyticsR["/api/analytics"]
-            LyricsR["/api/lyrics"]
-            LiveR["/api/live"]
-            UserR["/api/user"]
-            TransferR["/api/transfer"]
-        end
+    %% Routes
+    AuthR["/api/auth"]
+    PlaylistR["/api/playlists"]
+    DashboardR["/api/dashboard"]
+    AnalyticsR["/api/analytics"]
+    LyricsR["/api/lyrics"]
+    LiveR["/api/live"]
+    UserR["/api/user"]
+    TransferR["/api/transfer"]
 
-        subgraph Controllers ["Controllers"]
-            AuthC["authController.js"]
-            PlaylistC["playlistController.js"]
-            DashboardC["dashboardController.js"]
-            AnalyticsC["analyticsController.js"]
-            LyricsC["lyricsController.js"]
-            LiveC["liveListeningController.js"]
-            UserC["userController.js"]
-            TransferC["transferController.js"]
-            RecoC["recommendationsController.js"]
-        end
+    %% Controllers
+    AuthC["authController.js"]
+    PlaylistC["playlistController.js"]
+    DashboardC["dashboardController.js"]
+    AnalyticsC["analyticsController.js"]
+    LyricsC["lyricsController.js"]
+    LiveC["liveListeningController.js"]
+    UserC["userController.js"]
+    TransferC["transferController.js"]
+    RecoC["recommendationsController.js"]
 
-        subgraph Services ["Services"]
-            MLSvc["mlService.js (HTTP to ML API)"]
-            CacheSvc["cacheService.js (Redis)"]
-            SocketSvc["socketService.js (ws)"]
-        end
+    %% Services
+    MLSvc["mlService.js (HTTP to ML API)"]
+    CacheSvc["cacheService.js (Redis)"]
+    SocketSvc["socketService.js (ws)"]
 
-        subgraph Middleware ["Middleware"]
-            Auth["authMiddleware.js (JWT + Spotify token refresh)"]
-        end
+    %% Middleware
+    AuthMW["authMiddleware.js (JWT + Spotify token refresh)"]
 
-        subgraph Models ["MongoDB Models"]
-            UserM["userModel.js"]
-            HistoryM["listeningHistoryModel.js"]
-            SharedM["sharedPlaylistModel.js"]
-        end
-    end
+    %% MongoDB Models
+    UserM["userModel.js"]
+    HistoryM["listeningHistoryModel.js"]
+    SharedM["sharedPlaylistModel.js"]
 
-    subgraph External ["External Services"]
-        Spotify["Spotify Web API"]
-        Genius["Genius API"]
-        YouTube["YouTube Music API"]
-        MLService["MoodIQ ML Service (FastAPI)"]
-        MongoDB["MongoDB Atlas"]
-        Redis["Redis"]
-        Gemini["Gemini API (via ML service)"]
-    end
+    %% External Services
+    Spotify["Spotify Web API"]
+    Genius["Genius API"]
+    YouTube["YouTube Music API"]
+    MLService["MoodIQ ML Service (FastAPI)"]
+    MongoDB["MongoDB Atlas"]
+    Redis["Redis"]
 
+    %% Connections
     Frontend --> Server
-    WS --> SocketSvc
+    WSClient --> SocketSvc
 
     Server --> AuthR
     Server --> PlaylistR
@@ -76,31 +70,43 @@ graph TD
     Server --> UserR
     Server --> TransferR
 
-    AuthR --> AuthC
-    PlaylistR --> PlaylistC
-    DashboardR --> DashboardC
-    AnalyticsR --> AnalyticsC
-    LyricsR --> LyricsC
-    LiveR --> LiveC
-    UserR --> UserC
-    TransferR --> TransferC
+    AuthR --> AuthMW
+    PlaylistR --> AuthMW
+    DashboardR --> AuthMW
+    AnalyticsR --> AuthMW
+    LyricsR --> AuthMW
+    LiveR --> AuthMW
+    UserR --> AuthMW
+    TransferR --> AuthMW
 
-    AuthC --> Spotify
-    PlaylistC --> Spotify
+    AuthMW --> AuthC
+    AuthMW --> PlaylistC
+    AuthMW --> DashboardC
+    AuthMW --> AnalyticsC
+    AuthMW --> LyricsC
+    AuthMW --> LiveC
+    AuthMW --> UserC
+    AuthMW --> TransferC
+
     PlaylistC --> MLSvc
+    PlaylistC --> CacheSvc
+    PlaylistC --> Spotify
     DashboardC --> Spotify
     DashboardC --> CacheSvc
+    AuthC --> Spotify
+    AuthC --> MongoDB
     LyricsC --> Genius
     LyricsC --> MLSvc
     TransferC --> YouTube
     RecoC --> MLSvc
     AnalyticsC --> MongoDB
+    UserC --> MongoDB
 
     MLSvc --> MLService
     CacheSvc --> Redis
-    AuthC --> MongoDB
-    UserC --> MongoDB
-    AnalyticsC --> MongoDB
+    HistoryM --> MongoDB
+    UserM --> MongoDB
+    SharedM --> MongoDB
 ```
 
 ---
@@ -108,7 +114,7 @@ graph TD
 ## Key Features
 
 ### 1. Spotify OAuth and Token Management
-- Full OAuth 2.0 authorization code flow with PKCE-compatible redirect handling.
+- Full OAuth 2.0 authorization code flow with redirect handling.
 - Automatic Spotify access token refresh via `authMiddleware.js` on every protected request.
 - JWT issuance (30-day expiry) after successful Spotify authentication.
 - Middleware emits typed error codes (`JWT_EXPIRED`, `SPOTIFY_TOKEN_REFRESH_FAILED`) that the frontend interceptor maps to forced logout.
@@ -132,7 +138,7 @@ graph TD
 ### 5. Lyrics and Sentiment
 - Fetches lyrics from the Genius API via web scraping with `cheerio`.
 - Falls back to the Gemini API (via ML service) when Genius returns no results.
-- Runs sentiment analysis on fetched lyrics and returns label + confidence score.
+- Runs sentiment analysis on fetched lyrics and returns label plus confidence score.
 - Supports Genius search for the in-app lyrics search bar.
 
 ### 6. Live Listening Sessions
@@ -208,7 +214,7 @@ Backend/
 ├── services/
 │   ├── mlService.js               # HTTP client for MoodIQ ML service
 │   ├── cacheService.js            # Redis connection and cache helpers
-│   └── socketService.js          # WebSocket server management
+│   └── socketService.js           # WebSocket server management
 ├── utils/
 │   └── constants.js               # Shared constant values
 ├── server.js                      # App entry point, route registration, startup
