@@ -278,6 +278,23 @@ npm start
 
 ---
 
+## Engineering & Failure Handling
+
+MoodIQ integrates several failure-prone external systems including
+Spotify, Genius, YouTube Music, Redis, and a separate FastAPI ML service.
+
+Key reliability considerations:
+
+- Redis failures are non-fatal and fall back to uncached execution.
+- Spotify access tokens are refreshed automatically.
+- JWT and OAuth failures are surfaced through typed error states.
+- ML inference is isolated behind an HTTP service boundary.
+- External API responses are cached to reduce redundant requests.
+- WebSocket state is separated from REST request handling.
+- Third-party API failures are isolated from core application logic.
+
+---
+
 ## API Endpoints
 
 | Route | Description |
