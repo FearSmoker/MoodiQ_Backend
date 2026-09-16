@@ -321,6 +321,22 @@ Key reliability considerations:
 
 ---
 
+## Debugging & Observability
+
+Common failure paths handled during development:
+
+1. Spotify OAuth/token expiration
+2. External API failures
+3. Redis connection failures
+4. ML-service request failures
+5. WebSocket disconnects
+6. Invalid/partial third-party API responses
+
+The backend isolates external dependencies through service modules
+and propagates typed errors to the client.
+
+---
+
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
